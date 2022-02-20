@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "secret-kv"
+version = "0.1.0"
+description = "Project-local secret key/value storage protected by a single passphrase, optionally stored in keyring"
+authors = ["Sam McKelvie <sammck@gmail.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+sqlcipher3 = "^0.4.5"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
