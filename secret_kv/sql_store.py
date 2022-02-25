@@ -1,8 +1,7 @@
-from typing import Optional, Union, Tuple, Dict, TypeVar, Any, List, Iterable
-from .internal_types import JsonDict, JsonData, SqlConnection
+from typing import Optional, Union, Tuple, Dict, TypeVar, Any, List, Iterable, Mapping, Iterator
+from .internal_types import JsonableDict, Jsonable, SqlConnection
 
 import json
-from sentinels import NOTHING # type: ignore
 
 from .store import KvStore
 from .value import KvValue, KvType
@@ -165,7 +164,7 @@ class SqlKvStore(KvStore):
     if not row is None:
       key_id = row[0]
       kv_type = KvType(row[1])
-      json_data: JsonData = json.loads(row[2])
+      json_data: Jsonable = json.loads(row[2])
       value = KvValue(json_data, kv_type=kv_type)
     return key_id, value
 
@@ -189,7 +188,7 @@ class SqlKvStore(KvStore):
       result: Optional[KvValue] = None
     else:
       kv_type = KvType(row[0])
-      json_data: JsonData = json.loads(row[1])
+      json_data: Jsonable = json.loads(row[1])
       result = KvValue(json_data, kv_type=kv_type)
     return result
 
@@ -212,7 +211,7 @@ class SqlKvStore(KvStore):
     for row in cur:
       tag_name: str = row[0]
       kv_type = KvType(row[1])
-      json_data: JsonData = json.loads(row[2])
+      json_data: Jsonable = json.loads(row[2])
       value = KvValue(json_data, kv_type=kv_type)
       yield (tag_name, value)
 
@@ -288,7 +287,7 @@ class SqlKvStore(KvStore):
       self._delete_value_by_id(old_value_id)
     return tag_id
 
-  def _set_tags(self, key_id: int, tags: Dict[str, KvValue], clear_tags: bool=False):
+  def _set_tags(self, key_id: int, tags: Mapping[str, KvValue], clear_tags: bool=False):
     if clear_tags:
       self._clear_tags(key_id)
     for tag_name, value in tags.items():
@@ -319,7 +318,7 @@ class SqlKvStore(KvStore):
     key_id, value = self._get_key_id_and_value(key)
     return value
 
-  def set_value_and_tags(self, key: str, value: KvValue, tags: Dict[str, KvValue], clear_tags: bool=False):
+  def set_value_and_tags(self, key: str, value: KvValue, tags: Mapping[str, KvValue], clear_tags: bool=False):
     key_id = self._set_key_value(key, value)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
     self.db.commit()
@@ -345,19 +344,19 @@ class SqlKvStore(KvStore):
     cur.execute('''DELETE from kv_key WHERE kv_key_id = ? ''', [ key_id ])
     self.db.commit()
 
-  def keys(self) -> Iterable[str]:
+  def iter_keys(self) -> Iterator[str]:
     cur = self.db.cursor()
     cur.execute('''SELECT key_name FROM kv_key''')
     for row in cur:
       yield row[0]
 
-  def items(self) -> Iterable[Tuple[str, KvValue]]:
+  def iter_items(self) -> Iterator[Tuple[str, KvValue]]:
     cur = self.db.cursor()
     cur.execute('''SELECT key_name, kv_type, json_text FROM kv_key INNER JOIN kv_value on kv_key.kv_value_id = kv_value.kv_value_id''')
     for row in cur:
       key: str = row[0]
       kv_type = KvType(row[1])
-      json_data: JsonData = json.loads(row[2])
+      json_data: Jsonable = json.loads(row[2])
       value = KvValue(json_data, kv_type=kv_type)
       yield key, value
   
@@ -368,12 +367,12 @@ class SqlKvStore(KvStore):
       key_id: int = row[0]
       key: str = row[1]
       kv_type = KvType(row[2])
-      json_data: JsonData = json.loads(row[3])
+      json_data: Jsonable = json.loads(row[3])
       value = KvValue(json_data, kv_type=kv_type)
       tags = self._get_tags(key_id)
       yield key, value, tags
 
-  def values(self) -> Iterable[KvValue]:
+  def iter_values(self) -> Iterator[KvValue]:
     for key, value in self.items():
       yield value
 
@@ -409,7 +408,7 @@ class SqlKvStore(KvStore):
     result = self._get_tag(key_id, tag_name)
     return result
 
-  def set_tags(self, key, tags: Dict[str, KvValue], clear_tags: bool=False):
+  def set_tags(self, key, tags: Mapping[str, KvValue], clear_tags: bool=False):
     key_id = self._get_required_key_id(key)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
     self.db.commit()

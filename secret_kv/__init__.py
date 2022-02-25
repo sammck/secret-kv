@@ -9,7 +9,8 @@
 import importlib.metadata
 __version__ =  importlib.metadata.version(__name__.replace('_','-')) #  '0.1.0'
 
+from .internal_types import Jsonable, JsonableDict
 from .store import KvStore
 from .sql_store import SqlKvStore
-from .value import KvType, KvTypeBinary, KvTypeJsonData, KvValue
+from .value import KvType, KvTypeBinary, KvTypeJsonable, KvValue
 from .exceptions import KvError, KvNoEnumerationError, KvReadOnlyError

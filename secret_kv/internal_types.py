@@ -29,20 +29,28 @@ from typing import (
     Generator,
     Iterable,
     Iterable,
+    Mapping,
+    MutableMapping
   )
 
 NoneType = type(None)
 """A type-hint for the value None"""
 
 if TYPE_CHECKING:
-  JsonData = Union[str, int, float, bool, NoneType, Dict[str, Any], List[Any]]
-  """A Type hint for a simple JSON-serializable value; i.e., str, int, float, bool, None, Dict[str, JsonData], List[JsonData]"""
+  Jsonable = Union[str, int, float, bool, NoneType, Mapping[str, Any], List[Any]]
+  """A Type hint for a simple JSON-serializable value; i.e., str, int, float, bool, None, Mapping[str, Jsonable], List[Jsonable]"""
+  MutableJsonable = Union[str, int, float, bool, NoneType, MutableMapping[str, Any], List[Any]]
+  """A Type hint for a mutable simple JSON-serializable value; i.e., str, int, float, bool, None, MutableMapping[str, Jsonable], List[Jsonable]"""
 else:
-  JsonData = Union[str, int, float, bool, NoneType, Dict[str, 'JsonData'], List['JsonData']]
-  """A Type hint for a simple JSON-serializable value; i.e., str, int, float, bool, None, Dict[str, JsonData], List[JsonData]"""
+  Jsonable = Union[str, int, float, bool, NoneType, Mapping[str, 'Jsonable'], List['Jsonable']]
+  """A Type hint for a simple JSON-serializable value; i.e., str, int, float, bool, None, Mapping[str, Jsonable], List[Jsonable]"""
+  MutableJsonable = Union[str, int, float, bool, NoneType, MutableMapping[str, 'MutableJsonable'], List['MutableJsonable']]
+  """A Type hint for a mutable simple JSON-serializable value; i.e., str, int, float, bool, None, MutableMapping[str, MutableJsonable], List[MutableJsonable]"""
 
-JsonDict = Dict[str, JsonData]
-"""A type hint for a simple JSON-serializable dict; i.e., Dict[str, JsonData]"""
+JsonableDict = Mapping[str, Jsonable]
+"""A type hint for a simple JSON-serializable dict; i.e., Dict[str, Jsonable]"""
+MutableJsonableDict = Mapping[str, MutableJsonable]
+"""A type hint for a mutable simple JSON-serializable dict; i.e., Dict[str, Jsonable]"""
 
 import sqlite3
 

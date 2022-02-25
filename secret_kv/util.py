@@ -6,7 +6,7 @@
 """Miscellaneous utility functions"""
 
 from typing import Type, Any
-from .internal_types import JsonData
+from .internal_types import Jsonable
 
 import json
 
@@ -37,17 +37,17 @@ def full_type(o: Any) -> str:
   """
   return full_name_of_type(o.__class__)
 
-def clone_json_data(data: JsonData) -> JsonData:
+def clone_json_data(data: Jsonable) -> Jsonable:
   """Makes a deep copy of a json-serializable value, by serializing and then unserializing.
 
   Args:
-      data (JsonData): A JSON-serializable value
+      data (Jsonable): A JSON-serializable value
 
   Raises:
       TypeError: If data is not serializable to JSON
 
   Returns:
-      JsonData: A deep copy of the provided value, which can be modified without affecting the original.
+      Jsonable: A deep copy of the provided value, which can be modified without affecting the original.
   """
   if not data is None and not isinstance(data, (str, int, float, bool)):
     data = json.loads(json.dumps(data))

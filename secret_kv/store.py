@@ -10,19 +10,64 @@
    have rich value types.
 
    Subclasses of KvStore must override and implement a few get/set methods. Default implementations
-   are provided in the base class for most methods, and to provide a dict-like interface.
+   are provided in the base class for most methods, and to provide a MutableMapping interface.
 """
 
-from typing import Optional, Union, Tuple, Dict, TypeVar, Type, Generator, Iterable
-from .internal_types import JsonDict, JsonData
+from typing import Iterator, Optional, Union, Tuple, Dict, TypeVar, Type, Generator, Iterable, Mapping, MutableMapping, KeysView, ValuesView, ItemsView, overload
+from .internal_types import JsonableDict, Jsonable, MutableJsonableDict, MutableJsonable
 
 import json
-from sentinels import NOTHING  # type: ignore
 
 from .value import KvValue, KvType
 from .exceptions import KvError, KvReadOnlyError, KvNoEnumerationError
 
-class KvStore:
+class KvStore(MutableMapping[str, KvValue]):
+  class KvStoreKeysView(KeysView[str]):
+    _kv_store: 'KvStore'
+
+    def __init__(self, kv_store: 'KvStore'):
+      self._kv_store = kv_store
+
+    def __len__(self) -> int:
+      return len(self._kv_store)
+
+    def __iter__(self) -> Iterator[str]:
+      return self._kv_store.iter_keys()
+
+    def __contains__(self, key: object) -> bool:
+      return key in self._kv_store
+
+  class KvStoreValuesView(ValuesView[KvValue]):
+    _kv_store: 'KvStore'
+
+    def __init__(self, kv_store: 'KvStore'):
+      self._kv_store = kv_store
+
+    def __len__(self) -> int:
+      return len(self._kv_store)
+
+    def __iter__(self) -> Iterator[KvValue]:
+      return self._kv_store.iter_values()
+
+    def __contains__(self, value: object) -> bool:
+      return self._kv_store.contains_value(value)
+    
+  class KvStoreItemsView(ItemsView[str, KvValue]):
+    _kv_store: 'KvStore'
+
+    def __init__(self, kv_store: 'KvStore'):
+      self._kv_store = kv_store
+
+    def __len__(self) -> int:
+      return len(self._kv_store)
+
+    def __iter__(self) -> Iterator[Tuple[str, KvValue]]:
+      return self._kv_store.iter_items()
+
+    def __contains__(self, item: object) -> bool:
+      return self._kv_store.contains_item(item)
+
+    
   _store_name: Optional[str] = None
   """The name of the store. Typically a pathname or URI. If not set, a unique name for the in-memory object is used."""
 
@@ -87,13 +132,13 @@ class KvStore:
     """
     return self.get_value_and_tags(key)[0]
 
-  def set_value_and_tags(self, key: str, value: KvValue, tags: Dict[str, KvValue], clear_tags: bool=False):
+  def set_value_and_tags(self, key: str, value: KvValue, tags: Mapping[str, KvValue], clear_tags: bool=False):
     """Set the KvValue and tags associated with a key. If the key does not exist it is created.
 
     Args:
         key (str): The key that is being created or updated.
         value (KvValue): A KvValue to ass
-        tags (Dict[str, KvValue]): _description_
+        tags (Mapping[str, KvValue]): _description_
         clear_tags (bool, optional): _description_. Defaults to False.
 
     Raises:
@@ -109,77 +154,89 @@ class KvStore:
       raise KeyError(f"{self.store_name}: {json.dumps(key)}")
     raise KvReadOnlyError(f"{self.store_name}: Cannot delete key {json.dumps(key)}")
 
-  def keys(self) -> Iterable[str]:
+  def keys(self) -> KeysView[str]:
+    return self.KvStoreKeysView(self)
+
+  def values(self) -> ValuesView[KvValue]:
+    return self.KvStoreValuesView(self)
+
+  def items(self) -> ItemsView[str, KvValue]:
+    return self.KvStoreItemsView(self)
+
+  def iter_keys(self) -> Iterator[str]:
     raise KvNoEnumerationError(f"{self.store_name}: Key enumeration is not supported")
 
-  def items(self) -> Iterable[Tuple[str, KvValue]]:
+  def iter_items(self) -> Iterator[Tuple[str, KvValue]]:
     for key in self.keys():
       value = self.get_value(key)
       assert not value is None
       yield key, value
   
+  def iter_values(self) -> Iterator[KvValue]:
+    for key in self.keys():
+      value = self.get_value(key)
+      assert not value is None
+      yield value
+
+  def contains_value(self, value: object) -> bool:
+    if not isinstance(value, KvValue):
+      return False
+    for tvalue in self.values():
+      if value == tvalue:
+        return True
+    return False
+
+  def contains_item(self, item: object) -> bool:
+    if not isinstance(item, tuple) or len(item) != 2:
+      return False
+    key, value = item
+    if not isinstance(key, str) or not isinstance(value, KvValue):
+      return False
+    tvalue = self.get_value(key)
+    if tvalue is None:
+      return False
+    return value == tvalue
+
   def items_with_tags(self) -> Iterable[Tuple[str, KvValue, Dict[str, KvValue]]]:
     for key in self.keys():
       value, tags = self.get_value_and_tags(key)
       assert not value is None
       yield key, value, tags
 
-  def as_json_obj_no_type(self) -> Dict[str, JsonData]:
-    result: Dict[str, JsonData] = {}
+  def as_json_obj_no_type(self) -> Dict[str, Jsonable]:
+    result: Dict[str, Jsonable] = {}
     for key, value in self.items():
       result[key] = value.json_data
     return result
 
-  def as_json_obj(self, include_tags=True) -> Dict[str, Dict[str, JsonData]]:
-    result: Dict[str, Dict[str, JsonData]] = {}
+  def as_json_obj(self, include_tags=True) -> JsonableDict:
+    result = {}
     if include_tags:
       for key, value, tags in self.items_with_tags():
-        tag_dict: Dict[str, JsonData] = {}
+        tag_dict = {}
         for tag_name, tag_value in tags.items():
           tag_dict[tag_name] = dict(kv_type=tag_value.kv_type, data=tag_value.json_data)
-
         result[key] = dict(kv_type=value.kv_type, data=value.json_data, tags=tag_dict)
     else:
       for key, value in self.items():
         result[key] = dict(kv_type=value.kv_type, data=value.json_data)
     return result
 
-  def values(self) -> Iterable[KvValue]:
-    for key in self.keys():
-      value = self.get_value(key)
-      assert not value is None
-      yield value
-
   def clear(self):
     for key in list(self.keys()):
       self.delete_value(key)
 
-  def update(self, *args: Union[Dict[str, KvValue], 'KvStore', Iterable[Tuple[str, KvValue]]], **kwargs: KvValue):
+  def update(self, *args: Union[Mapping[str, KvValue], Iterable[Tuple[str, KvValue]]], **kwargs: KvValue):
     if len(args) > 0:
       if len(args) > 1:
         raise TypeError(f"update expected at most 1 argument, got {len(args)}")
       seq = args[0]
-      if isinstance(seq, (dict, KvStore)):
+      if isinstance(seq, Mapping):
         seq = seq.items()
       for k, v in seq:
         self.set_value(k, v)
     for k, v in kwargs.items():
         self.set_value(k, v)
-
-  _T = TypeVar('_T')
-  def pop(self, key: str, *args: _T) -> Union[KvValue, _T, None]:
-    if len(args) > 0:
-      if len(args) > 1:
-        raise TypeError(f"pop expected at most 2 arguments, got {len(args)+1}")
-      default = args[0]
-      try:
-        result = self.get_value(key)
-      except KeyError:
-        return default
-    else:
-      result = self.get_value(key)
-    self.delete_value(key)
-    return result
 
   def get_tags(self, key:str) -> Dict[str, KvValue]:
     value, tags = self.get_value_and_tags(key)
@@ -239,7 +296,7 @@ class KvStore:
     pass
 
   def __eq__(self, other: object) -> bool:
-    if not isinstance(other, (KvStore, dict)):
+    if not isinstance(other, Mapping):
       return False
     items = sorted(self.items())
     other_items = sorted(other.items())
@@ -268,8 +325,10 @@ class KvStore:
   def __len__(self) -> int:
     return self.num_keys()
 
-  def __contains__(self, key: str) -> bool:
+  def __contains__(self, key: object) -> bool:
+    if not isinstance(key, str):
+      return False
     return self.has_key(key)
 
-  def __iter__(self) -> Iterable[str]:
-    return self.keys()
+  def __iter__(self) -> Iterator[str]:
+    return self.iter_keys()

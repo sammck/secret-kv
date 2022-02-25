@@ -21,7 +21,7 @@
 """
 
 from typing import Optional, Union, Tuple, NewType
-from .internal_types import JsonDict, JsonData
+from .internal_types import JsonableDict, Jsonable
 
 import json
 from base64 import b64encode, b64decode
@@ -29,15 +29,15 @@ from base64 import b64encode, b64decode
 from .util import clone_json_data, full_type
 
 KvType = NewType('KvType', str)
-"""The string name for a native type that is represented by a KvValue. Currently either KvTypeJsonData or KvTypeBinary"""
+"""The string name for a native type that is represented by a KvValue. Currently either KvTypeJsonable or KvTypeBinary"""
 
 KvTypeBinary: KvType = KvType('binary')
 """Used to indicate that a KvValue represents a JSON serialization of a 'bytes' value"""
 
-KvTypeJsonData: KvType = KvType('json')
+KvTypeJsonable: KvType = KvType('json')
 """Used to indicate jthat a KvValue represents a simple JSON-serializable value"""
 
-KvValueCoercible = Union['KvValue', JsonData, bytes, bytearray]
+KvValueCoercible = Union['KvValue', Jsonable, bytes, bytearray]
 """A type-hint that describes either a KvValue, or a native value that can be implicitly encoded as a KvValue"""
 
 class KvValue:
@@ -45,34 +45,34 @@ class KvValue:
 
   Currently, the following value types are supported:
 
-  KvTypeJsonData:   Any of the basic types that is directly serializable with json.dumps();
-                    e.g., None, int, float, str, bool, List[JsonData], or Dict[str, JsonData]
+  KvTypeJsonable:   Any of the basic types that is directly serializable with json.dumps();
+                    e.g., None, int, float, str, bool, List[Jsonable], or Dict[str, Jsonable]
 
   KvTypeBinary:     A bytes/bytearray value
   """
 
   _kv_type: KvType
-  """The type of data that is encoded into json_data. Currently either KvTypeBinary or KvTypeJsonData"""
-  _json_data: JsonData
+  """The type of data that is encoded into json_data. Currently either KvTypeBinary or KvTypeJsonable"""
+  _json_data: Jsonable
   """The JSON-serializable value that represents the KvValue"""
   _json_text: str
   """The serialized JSON string that represents the value"""
 
-  def __init__(self, data: Union['KvValue', JsonData, bytes, bytearray], kv_type: Optional[KvType]=None):
+  def __init__(self, data: Union['KvValue', Jsonable, bytes, bytearray], kv_type: Optional[KvType]=None):
     """Create an immutable representation of a value that is serializable to and from JSON.
 
     Args:
-        data (Union[KvValue, JsonData, bytes, bytearray]):
+        data (Union[KvValue, Jsonable, bytes, bytearray]):
                             The value to represent. Possibilities:
                               A KvValue:  Makes a duplicate of another KvValue. kv_type is ignored.
                                     This is provided for convenience but is never necessary, since
                                     a KvValue is immutable and can be shared.
-                              A JsonData type (the basic types serializable to JSON): makes a deep
+                              A Jsonable type (the basic types serializable to JSON): makes a deep
                                     copy of the value.
                               bytes or bytearray: Encodes the value as base-64.
         kv_type (Optional[KvType], optional):
                             The KvType to be associated with the data, or
-                              None to infer a type from the data. Currently only KvTypeJsonData and
+                              None to infer a type from the data. Currently only KvTypeJsonable and
                               KvTypeBinary are supported. Defaults to None.
     """
     if isinstance(data, KvValue):
@@ -91,17 +91,17 @@ class KvValue:
       self._json_text = json.dumps(data, sort_keys=True)
       self._json_data = json.loads(self._json_text)
       if kv_type is None:
-        kv_type = KvTypeJsonData
+        kv_type = KvTypeJsonable
     self._kv_type = kv_type
   
   @property
-  def json_data(self) -> JsonData:
+  def json_data(self) -> Jsonable:
     """The JSON-serializable representation of the value. Must not be modified."""
     return self._json_data
 
   @property
   def kv_type(self) -> KvType:
-    """The type of data represented by the serialized form.  Currently either KvTypeJsonData or KvTypeBinary"""
+    """The type of data represented by the serialized form.  Currently either KvTypeJsonable or KvTypeBinary"""
     return self._kv_type
 
   def __str__(self) -> str:
@@ -112,35 +112,35 @@ class KvValue:
       result = f"<KvValue type={self.kv_type} data={jt}>"
     return result
 
-  def get_decoded_value(self) -> Union[JsonData, bytes]:
+  def get_decoded_value(self) -> Union[Jsonable, bytes]:
     """Gets the native nonserializable form of the value, as a value that must not be modified
 
     Returns:
-        Union[JsonData, bytes]: The native representation of the value. The caller must not modify this value.
+        Union[Jsonable, bytes]: The native representation of the value. The caller must not modify this value.
     """
-    result: Union[JsonData, bytes]
+    result: Union[Jsonable, bytes]
     if self.kv_type == KvTypeBinary:
       if not isinstance(self.json_data, str):
         raise TypeError(f"KvValue: KvTypeBinary should be encoded as str, but found {full_type(self.json_data)}")
       result = b64decode(self.json_data)
-    elif self.kv_type == KvTypeJsonData:
+    elif self.kv_type == KvTypeJsonable:
       result = self.json_data
     else:
       raise TypeError(f"KvValue: cannot decode unknown KvType '{self.kv_type}'")
     return result
 
-  def decode(self) -> Union[JsonData, bytes]:
+  def decode(self) -> Union[Jsonable, bytes]:
     """Gets the native nonserializable form of the value, as a modifiable value
 
     Returns:
-        Union[JsonData, bytes]: The native representation of the value. The returned value
+        Union[Jsonable, bytes]: The native representation of the value. The returned value
                 is owned by the caller to do with is they please.
     """
     if self.kv_type == KvTypeBinary:
       if not isinstance(self.json_data, str):
         raise TypeError(f"KvValue: KvTypeBinary should be encoded as str, but found {full_type(self.json_data)}")
       result = b64decode(self.json_data)
-    elif self.kv_type == KvTypeJsonData:
+    elif self.kv_type == KvTypeJsonable:
       # make a private copy
       result = json.loads(self.json_text) 
     else:
