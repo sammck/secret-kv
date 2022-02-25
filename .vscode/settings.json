@@ -3,5 +3,8 @@
         "editor.insertSpaces": true,
         "editor.tabSize": 2  
       },   
-    "restructuredtext.confPath": ""
+    "restructuredtext.confPath": "",
+    "files.exclude": {
+      "/trash": true
+    }
 }
