@@ -7,7 +7,7 @@
 """
 
 import importlib.metadata
-__version__ =  importlib.metadata.version(__name__.replace('_','-')) #  '0.1.0'
+__version__ =  importlib.metadata.version(__package__.replace('_','-')) #  '0.1.0'
 
 from .internal_types import Jsonable, JsonableDict
 from .store import KvStore
