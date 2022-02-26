@@ -4,7 +4,7 @@ from .internal_types import JsonableDict, Jsonable, SqlConnection
 import json
 
 from .store import KvStore
-from .value import KvValue, KvType
+from .value import KvValue, KvType, KvValueCoercible
 from .exceptions import KvError, KvReadOnlyError, KvNoEnumerationError
 
 from sqlite3 import Cursor
@@ -248,33 +248,37 @@ class SqlKvStore(KvStore):
     # TODO: this may be unnecessary due to CASCADE DELETE
     cur.execute('''DELETE from kv_tag WHERE kv_key_id = ? AND tag_name = ?''', [ key_id , tag_name])
 
-  def _insert_value(self, value: KvValue) -> int:
+  def _insert_value(self, value: KvValueCoercible) -> int:
     """Inserts a new unreferenced KvValue into kv_value, and returns its kv_value_id
     The caller must create a reference to the returned id within this transaction,
     (either from a tag or a key) or the newly created row will leak.
 
     Args:
-        value (KvValue): The new value to insert
+        value (KvValueCoercible): The new value to insert
 
     Returns:
-        int: The KvValue to insert
+        int: The kv_value_id of the newly created kv_value record
     """
+    if not isinstance(value, KvValue):
+      value = KvValue(value)
     cur = self.db.cursor()
     cur.execute('''INSERT INTO kv_value (kv_type, json_text) VALUES (?,?)''', [ value._kv_type, value.json_text ])
     return cur.lastrowid
 
-  def _delete_value_by_id(self, value_id):
+  def _delete_value_by_id(self, value_id: int):
     """Deletes a KvValue from kv_value by its id. Because of CASCADE DELETE, this will also
     delete any key or tag that references it, so generally the references should be removed first.
 
     Args:
-        value_d (KvValue): The value_id of the row containing the value
+        value_id (int): The value_id of the row containing the value
     """
     cur = self.db.cursor()
     cur.execute('''DELETE from kv_value WHERE kv_value_id = ?''', [ value_id ])
     return cur.lastrowid
 
-  def _set_tag(self, key_id: int, tag_name: str, value: KvValue) -> int:
+  def _set_tag(self, key_id: int, tag_name: str, value: KvValueCoercible) -> int:
+    if not isinstance(value, KvValue):
+      value = KvValue(value)
     tag_id, old_value_id = self._get_tag_id_and_value_id(key_id, tag_name)
     value_id = self._insert_value(value)
     cur = self.db.cursor()
@@ -282,18 +286,23 @@ class SqlKvStore(KvStore):
       cur.execute('''INSERT INTO kv_tag (tag_name, kv_key_id, kv_value_id ) VALUES(?, ?, ?)''', [ tag_name, key_id, value_id ])
       tag_id = cur.lastrowid
     else:
+      assert not old_value_id is None
       cur.execute('''UPDATE kv_tag SET kv_value_id = ? WHERE kv_tag_id = ?''', [ value_id, tag_id ])
       # TODO: this may be unnecessary due to CASCADE DELETE
       self._delete_value_by_id(old_value_id)
     return tag_id
 
-  def _set_tags(self, key_id: int, tags: Mapping[str, KvValue], clear_tags: bool=False):
+  def _set_tags(self, key_id: int, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
     if clear_tags:
       self._clear_tags(key_id)
     for tag_name, value in tags.items():
+      if not isinstance(value, KvValue):
+        value = KvValue(value)
       self._set_tag(key_id, tag_name, value)
 
-  def _set_key_value(self, key: str, value: KvValue) -> int:
+  def _set_key_value(self, key: str, value: KvValueCoercible) -> int:
+    if not isinstance(value, KvValue):
+      value = KvValue(value)
     key_id, old_value_id = self._get_key_id_and_value_id(key)
     value_id = self._insert_value(value)
     cur = self.db.cursor()
@@ -301,6 +310,7 @@ class SqlKvStore(KvStore):
       cur.execute('''INSERT INTO kv_key (key_name, kv_value_id ) VALUES(?, ?)''', [ key, value_id ])
       key_id = cur.lastrowid
     else:
+      assert not old_value_id is None
       cur.execute('''UPDATE kv_key SET kv_value_id = ? WHERE kv_key_id = ?''', [ value_id, key_id ])
       # TODO: this may be unnecessary due to CASCADE DELETE
       self._delete_value_by_id(old_value_id)
@@ -318,12 +328,16 @@ class SqlKvStore(KvStore):
     key_id, value = self._get_key_id_and_value(key)
     return value
 
-  def set_value_and_tags(self, key: str, value: KvValue, tags: Mapping[str, KvValue], clear_tags: bool=False):
+  def set_value_and_tags(self, key: str, value: KvValueCoercible, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
+    if not isinstance(value, KvValue):
+      value = KvValue(value)
     key_id = self._set_key_value(key, value)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
     self.db.commit()
 
-  def set_value(self, key: str, value: KvValue):
+  def set_value(self, key: str, value: KvValueCoercible):
+    if not isinstance(value, KvValue):
+      value = KvValue(value)
     self._set_key_value(key, value)
     self.db.commit()
 
@@ -408,12 +422,14 @@ class SqlKvStore(KvStore):
     result = self._get_tag(key_id, tag_name)
     return result
 
-  def set_tags(self, key, tags: Mapping[str, KvValue], clear_tags: bool=False):
+  def set_tags(self, key, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
     key_id = self._get_required_key_id(key)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
     self.db.commit()
 
-  def set_tag(self, key, tag_name: str, value: KvValue):
+  def set_tag(self, key, tag_name: str, value: KvValueCoercible):
+    if not isinstance(value, KvValue):
+      value = KvValue(value)
     key_id = self._get_required_key_id(key)
     self._set_tag(key_id, tag_name, value)
     self.db.commit()

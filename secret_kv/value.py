@@ -21,7 +21,7 @@
 """
 
 from typing import Optional, Union, Tuple, NewType
-from .internal_types import JsonableDict, Jsonable
+from .internal_types import JsonableDict, Jsonable, JsonableTypes
 
 import json
 from base64 import b64encode, b64decode
@@ -58,11 +58,11 @@ class KvValue:
   _json_text: str
   """The serialized JSON string that represents the value"""
 
-  def __init__(self, data: Union['KvValue', Jsonable, bytes, bytearray], kv_type: Optional[KvType]=None):
+  def __init__(self, data: KvValueCoercible, kv_type: Optional[KvType]=None):
     """Create an immutable representation of a value that is serializable to and from JSON.
 
     Args:
-        data (Union[KvValue, Jsonable, bytes, bytearray]):
+        data KvValueCoercible:
                             The value to represent. Possibilities:
                               A KvValue:  Makes a duplicate of another KvValue. kv_type is ignored.
                                     This is provided for convenience but is never necessary, since
@@ -191,4 +191,6 @@ class KvValue:
 
   def __hash__(self) -> int:
     return hash(self.as_sortable_value())
-  
+
+KvValueCoercibleTypes = ( KvValue, ) + JsonableTypes
+"""A Tuple containing the basic types that can be coerced to a KvValue. Excludes None. Useful for isinstance"""
