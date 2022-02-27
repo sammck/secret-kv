@@ -51,3 +51,5 @@ import sqlite3
 
 SqlConnection = sqlite3.Connection
 """A type hint for a connection to an SQL database (possibly sqlite3 or sqlcipher3)"""
+
+from .sentinel import Sentinel, Nothing, NothingType
