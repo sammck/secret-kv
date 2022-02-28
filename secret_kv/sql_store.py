@@ -11,34 +11,61 @@ from sqlite3 import Cursor
 
 class SqlKvStore(KvStore):
   _db: Optional[SqlConnection] = None
+  _passphrase: Optional[str] = None
   _db_pragmas_initialized: bool = False
+  _db_initialized: bool = False
 
   SCHEMA_VERSION: int = 1
   DB_APP_NAME = "SqlKvStore"
 
-  def __init__(self, store_name: Optional[str]=None, db: Optional[SqlConnection]=None):
+  def __init__(self, store_name: Optional[str]=None, db: Optional[SqlConnection]=None, passphrase: Optional[str]=None):
     super().__init__(store_name)
     self._db = db
+    self._passphrase = passphrase
 
   @property
-  def db(self) -> SqlConnection:
-    if self._db is None:
-      raise RuntimeError(f"{self}: Database is not connected")
+  def db(self) -> Optional[SqlConnection]:
+    return self._db
+
+  @db.setter
+  def db(self, db: SqlConnection):
+    if self._db_pragmas_initialized:
+      raise RuntimeError("SqlKvStore: Cannot change db SqlConnection after initialization")
+    self._db = db
+
+  def get_db(self) -> SqlConnection:
+    db = self.db
+    if db is None:
+      raise RuntimeError("SqlKvStore: Database has not been connected")
+    if not self._db_initialized:
+      self.init_db()
+    return db
+
+  def set_passhrase(self, passphrase: Optional[str]):
+    if self._db_pragmas_initialized:
+      raise RuntimeError("SqlKvStore: Cannot set passphrase after initialization")
+    self._passphrase = passphrase
     return self._db
 
   def close(self):
-    if not self.db is None:
-      self.db.close()
+    if not self._db is None:
+      self._db.close()
 
   def initialize_db_pragmas(self):
     if not self._db_pragmas_initialized:
       db = self.db
+      if not self._passphrase is None:
+        # NOTE: sqlite3 interpolation/scaping does not work with pragma.
+        #       so we will manually escape the quoted passphrase
+        escaped_passphrase = self._passphrase.replace("'", "''")
+        db.execute(f"PRAGMA key = '{escaped_passphrase}';")
       db.execute('''PRAGMA foreign_keys = ON;''')
       self._db_pragmas_initialized = True
 
   def initialize_new_db(self):
+    db = self.db
     self.initialize_db_pragmas()
-    cur = self.db.cursor()
+    cur = db.cursor()
     cur.execute(
       '''CREATE TABLE dbinfo (
              dbinfo_id        INTEGER     PRIMARY_KEY NOT NULL,
@@ -88,29 +115,32 @@ class SqlKvStore(KvStore):
       '''INSERT INTO dbinfo (dbinfo_id, app, schema_version) VALUES (?,?,?);''',
       (0, self.DB_APP_NAME, self.SCHEMA_VERSION))
 
-    self.db.commit()
+    db.commit()
 
   def init_db(self):
-    self.initialize_db_pragmas()
-    cur = self.db.cursor()
-    cur.execute('''SELECT count(name) FROM sqlite_master WHERE type='table' AND name=? ''', [ "dbinfo" ])
+    if not self._db_initialized:
+      db = self.db
+      self.initialize_db_pragmas()
+      cur = db.cursor()
+      cur.execute('''SELECT count(name) FROM sqlite_master WHERE type='table' AND name=? ''', [ "dbinfo" ])
 
-    if cur.fetchone()[0] == 0:
-      self.initialize_new_db()
-    else:
-      cur.execute('''SELECT dbinfo_id,app,schema_version FROM dbinfo''')
-      dbinfo_id, app_name, schema_version = cur.fetchone()
-      dbinfo_id: int
-      app_name: str
-      schema_version: int
-      if app_name != self.DB_APP_NAME:
-        raise RuntimeError(f"{self}: Registered app name {json.dumps(app_name)} does not match required value {json.dumps(self.DB_APP_NAME)}")
-      if dbinfo_id != 0:
-        raise RuntimeError(f"{self}: database dbinfo_id has corrupt value {dbinfo_id}")
-      if schema_version > self.SCHEMA_VERSION:
-        raise RuntimeError(f"{self}: Database schema version {schema_version} is newer than software schema version {self.SCHEMA_VERSION}; upgrade is required")
-      if schema_version < self.SCHEMA_VERSION:
-        raise RuntimeError(f"{self}: Database schema version {schema_version} is older than software schema version {self.SCHEMA_VERSION}; schema upgrade is not implemented. Delete the database and recreate.")
+      if cur.fetchone()[0] == 0:
+        self.initialize_new_db()
+      else:
+        cur.execute('''SELECT dbinfo_id,app,schema_version FROM dbinfo''')
+        dbinfo_id, app_name, schema_version = cur.fetchone()
+        dbinfo_id: int
+        app_name: str
+        schema_version: int
+        if app_name != self.DB_APP_NAME:
+          raise RuntimeError(f"{self}: Registered app name {json.dumps(app_name)} does not match required value {json.dumps(self.DB_APP_NAME)}")
+        if dbinfo_id != 0:
+          raise RuntimeError(f"{self}: database dbinfo_id has corrupt value {dbinfo_id}")
+        if schema_version > self.SCHEMA_VERSION:
+          raise RuntimeError(f"{self}: Database schema version {schema_version} is newer than software schema version {self.SCHEMA_VERSION}; upgrade is required")
+        if schema_version < self.SCHEMA_VERSION:
+          raise RuntimeError(f"{self}: Database schema version {schema_version} is older than software schema version {self.SCHEMA_VERSION}; schema upgrade is not implemented. Delete the database and recreate.")
+      self._db_initialized = True
 
   def _get_key_id(self, key: str) -> Optional[int]:
     """Look up the key_id for a named key, if it exists
@@ -121,7 +151,7 @@ class SqlKvStore(KvStore):
     Returns:
         Optional[int]: The key_id of the key, if it exists, and None otherwise
     """
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     key_id: Optional[int] = None
     cur.execute('''SELECT kv_key_id FROM kv_key WHERE kv_key.key_name = ?''', [ key ])
     row = cur.fetchone()
@@ -144,7 +174,7 @@ class SqlKvStore(KvStore):
     return key_id
 
   def _get_key_id_and_value_id(self, key: str) -> Tuple[Optional[int], Optional[int]]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT kv_key_id, kv_value_id FROM kv_key WHERE kv_key.key_name = ?''', [ key ])
     row = cur.fetchone()
     if row is None:
@@ -156,7 +186,7 @@ class SqlKvStore(KvStore):
     return key_id, value_id
 
   def _get_key_id_and_value(self, key: str) -> Tuple[Optional[int], Optional[KvValue]]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     key_id: Optional[int] = None
     value: Optional[KvValue] = None
     cur.execute('''SELECT kv_key_id, kv_type, json_text FROM kv_key INNER JOIN kv_value on kv_key.kv_value_id = kv_value.kv_value_id WHERE kv_key.key_name = ?''', [ key ])
@@ -169,7 +199,7 @@ class SqlKvStore(KvStore):
     return key_id, value
 
   def _get_tag_id_and_value_id(self, key_id: int, tag_name: str) -> Tuple[Optional[int], Optional[int]]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT kv_tag_id, kv_value_id FROM kv_tag WHERE kv_tag.kv_key_id = ? AND kv_tag.tag_name = ?''', [ key_id, tag_name ])
     row = cur.fetchone()
     if row is None:
@@ -181,7 +211,7 @@ class SqlKvStore(KvStore):
     return tag_id, value_id
 
   def _get_tag(self, key_id: int, tag_name: str) -> Optional[KvValue]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT kv_type, json_text FROM kv_tag INNER JOIN kv_value on kv_tag.kv_value_id = kv_value.kv_value_id WHERE kv_tag.kv_key_id = ? AND kv_tag.key_name = ?''', [ key_id, tag_name ])
     row = cur.fetchone()
     if row is None:
@@ -193,20 +223,20 @@ class SqlKvStore(KvStore):
     return result
 
   def _has_tag(self, key_id: int, tag_name: str) -> bool:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT COUNT(*) FROM kv_tag WHERE kv_tag.kv_key_id = ? AND kv_tag.key_name = ?''', [ key_id, tag_name ])
     result = cur.fetchone()[0] > 0
     return result
 
   def _get_tag_names(self, key_id: int) -> Iterable[str]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT tag_name from kv_tag WHERE kv_tag.kv_key_id = ?''', [ key_id ])
     for row in cur:
       tag_name: str = row[0]
       yield tag_name
 
   def _get_tags_as_items(self, key_id: int) -> Iterable[Tuple[str, KvValue]]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT tag_name, kv_type, json_text FROM kv_tag INNER JOIN kv_value on kv_tag.kv_value_id = kv_value.kv_value_id WHERE kv_tag.kv_key_id = ?''', [ key_id ])
     for row in cur:
       tag_name: str = row[0]
@@ -219,7 +249,7 @@ class SqlKvStore(KvStore):
     return dict(self._get_tags_as_items(key_id))
 
   def _clear_tags(self, key_id: int):
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute(
       '''DELETE FROM kv_value
             WHERE EXISTS (
@@ -231,13 +261,13 @@ class SqlKvStore(KvStore):
     cur.execute('''DELETE from kv_tag WHERE kv_key_id = ?''', [ key_id] )
 
   def _delete_tag_and_value_by_id(self, tag_id: int, value_id: int):
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''DELETE FROM kv_value WHERE kv_value_id = ?''', [ value_id ])
     # TODO: this may be unnecessary due to CASCADE DELETE
     cur.execute('''DELETE from kv_tag WHERE kv_tag_id = ?''', [ tag_id ])
 
   def _delete_tag(self, key_id: int, tag_name: str):
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute(
       '''DELETE FROM kv_value
             WHERE EXISTS (
@@ -261,7 +291,7 @@ class SqlKvStore(KvStore):
     """
     if not isinstance(value, KvValue):
       value = KvValue(value)
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''INSERT INTO kv_value (kv_type, json_text) VALUES (?,?)''', [ value._kv_type, value.json_text ])
     return cur.lastrowid
 
@@ -272,7 +302,7 @@ class SqlKvStore(KvStore):
     Args:
         value_id (int): The value_id of the row containing the value
     """
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''DELETE from kv_value WHERE kv_value_id = ?''', [ value_id ])
     return cur.lastrowid
 
@@ -281,7 +311,7 @@ class SqlKvStore(KvStore):
       value = KvValue(value)
     tag_id, old_value_id = self._get_tag_id_and_value_id(key_id, tag_name)
     value_id = self._insert_value(value)
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     if tag_id is None:
       cur.execute('''INSERT INTO kv_tag (tag_name, kv_key_id, kv_value_id ) VALUES(?, ?, ?)''', [ tag_name, key_id, value_id ])
       tag_id = cur.lastrowid
@@ -305,7 +335,7 @@ class SqlKvStore(KvStore):
       value = KvValue(value)
     key_id, old_value_id = self._get_key_id_and_value_id(key)
     value_id = self._insert_value(value)
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     if key_id is None:
       cur.execute('''INSERT INTO kv_key (key_name, kv_value_id ) VALUES(?, ?)''', [ key, value_id ])
       key_id = cur.lastrowid
@@ -320,7 +350,7 @@ class SqlKvStore(KvStore):
     tags: Dict[str, KvValue] = {}
     key_id, value = self._get_key_id_and_value(key)
     if not key_id is None:
-      cur = self.db.cursor()
+      cur = self.get_db().cursor()
       tags = self._get_tags(key_id)
     return value, tags
 
@@ -333,20 +363,20 @@ class SqlKvStore(KvStore):
       value = KvValue(value)
     key_id = self._set_key_value(key, value)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
-    self.db.commit()
+    self.get_db().commit()
 
   def set_value(self, key: str, value: KvValueCoercible):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     self._set_key_value(key, value)
-    self.db.commit()
+    self.get_db().commit()
 
   def delete_value(self, key: str):
     key_id, value_id = self._get_key_id_and_value_id(key)
     if key_id is None:
       raise KeyError(f"{self.store_name}: {json.dumps(key)}")
     self._clear_tags(key_id)
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute(
       '''DELETE FROM kv_value
             WHERE EXISTS (
@@ -356,16 +386,16 @@ class SqlKvStore(KvStore):
       ''', [ key_id ])
     # TODO: this may be unnecessary due to CASCADE DELETE
     cur.execute('''DELETE from kv_key WHERE kv_key_id = ? ''', [ key_id ])
-    self.db.commit()
+    self.get_db().commit()
 
   def iter_keys(self) -> Iterator[str]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT key_name FROM kv_key''')
     for row in cur:
       yield row[0]
 
   def iter_items(self) -> Iterator[Tuple[str, KvValue]]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT key_name, kv_type, json_text FROM kv_key INNER JOIN kv_value on kv_key.kv_value_id = kv_value.kv_value_id''')
     for row in cur:
       key: str = row[0]
@@ -375,7 +405,7 @@ class SqlKvStore(KvStore):
       yield key, value
   
   def items_with_tags(self) -> Iterable[Tuple[str, KvValue, Dict[str, KvValue]]]:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT kv_key_id, key_name, kv_type, json_text FROM kv_key INNER JOIN kv_value on kv_key.kv_value_id = kv_value.kv_value_id''')
     for row in cur:
       key_id: int = row[0]
@@ -391,16 +421,16 @@ class SqlKvStore(KvStore):
       yield value
 
   def clear(self):
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''DELETE FROM kv_value''')
     # TODO: this may be unnecessary due to CASCADE DELETE
     cur.execute('''DELETE FROM kv_key''')
     # TODO: this may be unnecessary due to CASCADE DELETE
     cur.execute('''DELETE FROM kv_tag''')
-    self.db.commit()
+    self.get_db().commit()
 
   def has_key(self, key: str) -> bool:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT COUNT(*) FROM kv_key WHERE kv_key.key_name = ?''', [ key ])
     result = cur.fetchone()[0] > 0
     return result
@@ -412,7 +442,7 @@ class SqlKvStore(KvStore):
 
   def get_num_tags(self, key:str) -> int:
     key_id = self._get_required_key_id(key)
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT COUNT(*) kv_tag WHERE kv_key_id = ?''', [ key_id ])
     result: int = cur.fetchone()[0]
     return result
@@ -425,14 +455,14 @@ class SqlKvStore(KvStore):
   def set_tags(self, key, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
     key_id = self._get_required_key_id(key)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
-    self.db.commit()
+    self.get_db().commit()
 
   def set_tag(self, key, tag_name: str, value: KvValueCoercible):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     key_id = self._get_required_key_id(key)
     self._set_tag(key_id, tag_name, value)
-    self.db.commit()
+    self.get_db().commit()
 
   def delete_tag(self, key, tag_name: str):
     key_id = self._get_required_key_id(key)
@@ -441,7 +471,7 @@ class SqlKvStore(KvStore):
       raise KeyError(f"{self.store_name}: key {json.dumps(key)}, tag {json.dumps(key)}")
     assert not value_id is None
     self._delete_tag_and_value_by_id(tag_id, value_id)
-    self.db.commit()
+    self.get_db().commit()
 
   def tag_names(self, key: str) -> Iterable[str]:
     key_id = self._get_required_key_id(key)
@@ -460,12 +490,23 @@ class SqlKvStore(KvStore):
     return self._has_tag(key_id, tag_name)
 
   def num_keys(self) -> int:
-    cur = self.db.cursor()
+    cur = self.get_db().cursor()
     cur.execute('''SELECT COUNT(*) FROM kv_key''')
     result: int = cur.fetchone()[0]
     return result
 
-def test_me() -> SqlKvStore:
+def test_me() -> KvStore:
+  from .config import ConfigContext
+  from .config.sql_store import SqlKvStoreConfig
+
+  ctx = ConfigContext()
+  cfg: SqlKvStoreConfig = ctx.load_file('test.json')
+  db = cfg.open_store(create=True)
+  print(f"The database is opened: '{db}'")
+  
+  return db
+
+def test_me2() -> SqlKvStore:
   fname = 'test.db'
   import sqlite3
   import os

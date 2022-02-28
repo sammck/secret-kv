@@ -13,7 +13,6 @@ repository = "https://github.com/sammck/secret-kv.git"
 [tool.poetry.dependencies]
 python = "^3.8"
 sqlcipher3 = "^0.4.5"
-sentinels = "^1.0.0"
 keyring = "^23.5.0"
 
 [tool.poetry.dev-dependencies]

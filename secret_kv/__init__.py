@@ -14,3 +14,4 @@ from .store import KvStore
 from .sql_store import SqlKvStore
 from .value import KvType, KvTypeBinary, KvTypeJsonable, KvValue
 from .exceptions import KvError, KvNoEnumerationError, KvReadOnlyError
+from .config import Config, ConfigContext

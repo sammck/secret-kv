@@ -7,19 +7,41 @@
 
 from typing import Optional
 
-import keyring
+import os
 
-from ..util import full_name_of_type
-from ..sql_store import SqlKvStore
+from ..util import full_type
 from .store import KvStoreConfig, KvStore
+from ..sql_store import SqlKvStore, SqlConnection
+import sqlcipher3 # type: ignore
+#import sqlite3
 
 class SqlKvStoreConfig(KvStoreConfig):
-  _keyring_service: Optional[str] = None
-  _keyring_key: Optional[str] = None
-  
-  def bake(self):
-    self._keyring_service = self._json_data['service']
-    self._keyring_key = self._json_data['key']
+  _db_file_name: Optional[str] = None
 
-  def open_store(self, create: bool=False, erase: bool=False, create_only: bool=False) -> KvStore:
-    raise NotImplementedError()
+  def bake(self):
+    super().bake()
+    self._db_file_name = os.path.abspath(os.path.expanduser(self.get_cfg_property_str('file_name')))
+
+  def open_store(self, create: bool=False, create_only: bool=False, erase: bool=False) -> KvStore:
+    create = create or create_only
+    file_name = self._db_file_name
+    assert not file_name is None
+    if self._passphrase_cfg is None:
+      passphrase: Optional[str] = None
+    else:
+      passphrase = self._passphrase_cfg.get_passphrase()
+
+    if os.path.exists(file_name):
+      if create_only:
+        raise FileExistsError(f"SqlKvStoreConfig: Database file already exists: {file_name}")
+      if erase:
+        os.remove(file_name)
+    else:
+      if not create:
+        raise FileNotFoundError(f"SqlKvStoreConfig: Database file does not exist: {file_name}")
+
+    db: SqlConnection = sqlcipher3.connect(file_name)
+    store = SqlKvStore(store_name=file_name, db=db, passphrase=passphrase)
+    store.init_db()
+    return store
+

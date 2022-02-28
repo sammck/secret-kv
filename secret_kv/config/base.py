@@ -8,7 +8,7 @@
 """
 
 from typing import Optional, Dict, TextIO, Any, Mapping, Type, TypeVar, Union, overload
-from ..internal_types import Jsonable, JsonableDict, Nothing, NothingType
+from ..internal_types import Jsonable, JsonableDict, Nothing, NothingType, JsonableTypes
 
 
 import os
@@ -88,10 +88,12 @@ class Config:
   def get_cfg_property(self, key: str, default = _no_default):
     if not isinstance(self._json_data, dict):
       raise TypeError(f"Config: Expected config data {key} to be dict, got {type(self._json_data)}")
-    if default is self._no_default:
-      result = self._json_data[key]
-    else:
-      result = self._json_data.get(key, default)
+    result = self._json_data.get(key, default)
+    if result is self._no_default:
+      raise KeyError("Config: Property {key} does not exist and has no default")
+    if not result is None and not isinstance(result, JsonableTypes):
+      raise TypeError(f"Config: Expected property {key} to be JSON-able, got {type(result)}")
+    return result
 
   @overload
   def get_cfg_property_str(self, key: str, default: _T) -> Union[str, _T]: pass

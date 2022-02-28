@@ -10,12 +10,18 @@ from ..internal_types import JsonableDict
 
 import keyring
 
-from ..util import full_name_of_type
+from ..util import full_name_of_type, full_type
 from .base import Config
 
 class PassphraseConfig(Config):
   def get_passphrase(self) -> str:
-    raise NotImplementedError()
+    raise NotImplementedError(f"{full_type(self)} does not implement get_passphrase")
+
+  def set_passphrase(self, s: str):
+    raise NotImplementedError(f"{full_type(self)} does not implement set_passphrase")
+
+  def delete_passphrase(self):
+    raise NotImplementedError(f"{full_type(self)} does not implement delete_passphrase")
 
   def passphrase_exists(self) -> bool:
     try:
@@ -24,20 +30,3 @@ class PassphraseConfig(Config):
       return False
 
     return True
-
-class KeyringPassphraseConfig(PassphraseConfig):
-  _keyring_service: Optional[str] = None
-  _keyring_key: Optional[str] = None
-  
-  def bake(self):
-    self._keyring_service = self._json_data['service']
-    self._keyring_key = self._json_data['key']
-
-  def get_passphrase(self) -> str:
-    assert not self._keyring_service is None
-    assert not self._keyring_key is None
-    result = keyring.get_password(self._keyring_service, self._keyring_key)
-    if result is None:
-      raise KeyError(f"KeyringPassphraseConfig: service '{self._keyring_service}', key name '{self._keyring_key}' does not exist")
-    return result
-
