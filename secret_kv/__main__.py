@@ -9,7 +9,7 @@
 
 
 import base64
-from typing import Optional, Sequence, List, Union
+from typing import Optional, Sequence, List, Union, Dict, TextIO
 
 import os
 import sys
@@ -17,6 +17,15 @@ import argparse
 import argcomplete
 import json
 from base64 import b64encode, b64decode
+import jq
+import colorama
+from colorama import Fore, Back, Style
+import subprocess
+from io import TextIOWrapper
+
+def is_colorizable(stream: TextIO) -> bool:
+  is_a_tty = hasattr(stream, 'isattry') and stream.isatty()
+  return is_a_tty
 
 # NOTE: this module runs with -m; do not use relative imports
 from secret_kv import (
@@ -30,7 +39,10 @@ from secret_kv import (
     locate_kv_store_config_file,
     load_kv_store_config,
     delete_kv_store,
+    Jsonable,
+    JsonableDict,
   )
+from secret_kv.util import full_type
 
 class CmdExitError(RuntimeError):
   exit_code: int
@@ -50,9 +62,20 @@ class CommandHandler:
   _scan_parent_dirs: bool = True
   _erase_db: bool = False
   _passphrase: Optional[str] = None
+  _raw_stdout: TextIO = sys.stdout
+  _raw_stderr: TextIO = sys.stderr
+  _colorize_stdout: bool = False
+  _colorize_stderr: bool = False
+  _compact: bool = False
 
   def __init__(self, argv: Optional[Sequence[str]]=None):
     self._argv = argv
+
+  def ocolor(self, codes: str) -> str:
+    return codes if self._colorize_stdout else ""
+
+  def ecolor(self, codes: str) -> str:
+    return codes if self._colorize_stderr else ""
 
   def abspath(self, path: str) -> str:
     return os.path.abspath(os.path.join(self._cwd, os.path.expanduser(path)))
@@ -73,7 +96,33 @@ class CommandHandler:
       self._store = cfg.open_store(erase=self._erase_db, passphrase=self._passphrase)
     return self._store
     
-  def cmd_bare(self, args: argparse.Namespace) -> int:
+  def pretty_print(self, value: Jsonable, compact: Optional[bool]=None, colorize: Optional[bool]=None):
+    if compact is None:
+      compact = self._compact
+    if colorize is None:
+      colorize = self._colorize_stdout
+    else:
+      colorize = colorize and self._colorize_stdout
+
+    if not colorize:
+      if compact:
+        json.dump(value, sys.stdout, separators=(',', ':'), sort_keys=True)
+      else:
+        json.dump(value, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write('\n')
+    else:
+      jq_input = json.dumps(value, separators=(',', ':'), sort_keys=True)
+      cmd = [ 'jq' ]
+      if compact:
+        cmd.append('-c')
+      cmd.append('.')
+      with subprocess.Popen(cmd, stdin=subprocess.PIPE) as proc:
+        proc.communicate(input=json.dumps(value, separators=(',', ':'), sort_keys=True).encode('utf-8'))
+        exit_code = proc.returncode
+      if exit_code != 0:
+        raise subprocess.CalledProcessError(exit_code, cmd)
+
+  def cmd_bare(self) -> int:
     print("A command is required", file=sys.stderr)
     return 1
 
@@ -126,8 +175,8 @@ class CommandHandler:
     store = self.get_kv_store()
     kv = store.get_value(key)
     if kv is None:
-      raise KeyError(f"secret-kv: get: key \"{key}\" does not exist")
-    print(json.dumps(kv.json_data, indent=2, sort_keys=True))
+      raise KeyError(f"get: key \"{key}\" does not exist")
+    self.pretty_print(kv.json_data)
 
   def cmd_set(self) -> int:
     #
@@ -148,20 +197,38 @@ class CommandHandler:
                         help='Read the value from the specified file instead of the commandline')
 
     """
+    tags: Dict[str, KvValue] = {}
     args = self._args
     key: str = args.key
+    encoding: str = args.text_encoding
+    clear_tags: bool = args.clear_tags
     value_s: Optional[str] = args.value
     value_type_s: Optional[str] = args.value_type
     if args.vtype_json:
       if value_type_s is None:
         value_type_s = 'json'
       elif value_type_s != 'json':
-        raise ValueError(f"secret-kv: set: Conflicting value types {value_type_s} and json")
+        raise ValueError(f"set: Conflicting value types {value_type_s} and json")
     if args.vtype_int:
       if value_type_s is None:
         value_type_s = 'int'
       elif value_type_s != 'int':
-        raise ValueError(f"secret-kv: set: Conflicting value types {value_type_s} and int")
+        raise ValueError(f"set: Conflicting value types {value_type_s} and int")
+    if args.vtype_float:
+      if value_type_s is None:
+        value_type_s = 'float'
+      elif value_type_s != 'float':
+        raise ValueError(f"set: Conflicting value types {value_type_s} and float")
+    if args.vtype_bool:
+      if value_type_s is None:
+        value_type_s = 'bool'
+      elif value_type_s != 'bool':
+        raise ValueError(f"set: Conflicting value types {value_type_s} and bool")
+    if args.vtype_typed_json:
+      if value_type_s is None:
+        value_type_s = 'typed-json'
+      elif value_type_s != 'typed-json':
+        raise ValueError(f"set: Conflicting value types {value_type_s} and typed-json")
     if value_type_s is None:
       value_type_s = 'str'
     use_stdin: bool = args.use_stdin
@@ -170,39 +237,42 @@ class CommandHandler:
       if input_file is None:
         input_file = '/dev/stdin'
       else:
-        raise ValueError(f"secret-kv: set: Conflicting value input sources, --stdin and \"{input_file}\"")
+        raise ValueError(f"set: Conflicting value input sources, --stdin and \"{input_file}\"")
     value: Union[str, bytes]
     if input_file is None:
       if value_s is None:
-        raise ValueError("secret-kv: set: One of <value>, --stdin, or --input <filename> must be provided.")
+        raise ValueError("set: One of <value>, --stdin, or --input <filename> must be provided.")
       if value_type_s == 'binary':
-        value = value_s.encode('utf-8')
+        value = value_s.encode(encoding)
       else:
         value = value_s
     else:
       if not value_s is None:
-        raise ValueError("secret-kv: set: <value> must be omitted if -i, --input, or --stdin is provided.")
-      mode = 'b' if value_type_s == 'binary' else 't'
-      with open(input_file, mode) as f:
-        value = f.readall()
+        raise ValueError("set: <value> must be omitted if -i, --input, or --stdin is provided.")
+      if value_type_s == 'binary':
+        with open(input_file, 'rb') as f:
+          value = f.read()
+      else:
+        with open(input_file, 'r', encoding=encoding) as f:
+          value = f.read()
 
     if value_type_s == 'base64':
       try:
         value = b64decode(value, validate=True)
       except Exception as ex:
-        raise ValueError(f"secret-kv: set: Invalid base-64 encoded string: {ex}") from ex
+        raise ValueError(f"set: Invalid base-64 encoded string: {ex}") from ex
       value_type_s = 'binary'
 
     if value_type_s == 'int':
       try:
         value = int(value)
       except ValueError as ex:
-        raise ValueError(f"secret-kv: set: Invalid integer literal") from ex
+        raise ValueError(f"set: Invalid integer literal") from ex
     elif value_type_s == 'float':
       try:
         value = float(value)
       except ValueError as ex:
-        raise ValueError(f"secret-kv: set: Invalid float literal") from ex
+        raise ValueError(f"set: Invalid float literal") from ex
     elif value_type_s == 'bool':
       value = value.lower()
       if value in [ 'true', 't', 'yes', 'y', '1' ]:
@@ -210,19 +280,39 @@ class CommandHandler:
       elif value in [ 'false', 'f', 'no', 'n', '0' ]:
         value = 'false'
       else:
-        raise ValueError(f"secret-kv: set: Invalid boolean literal: '{value}'")
+        raise ValueError(f"set: Invalid boolean literal: '{value}'")
     elif value_type_s == 'json':
       try:
         value = json.loads(value)
       except json.JSONDecodeError as ex:
-        raise ValueError(f"secret-kv: set: Invalid JSON text: {ex}") from ex
-
+        raise ValueError(f"set: Invalid JSON text: {ex}") from ex
+    elif value_type_s == 'typed-json':
+      try:
+        value = json.loads(value)
+      except json.JSONDecodeError as ex:
+        raise ValueError(f"set: Invalid typed-JSON text: {ex}") from ex
     elif value_type_s in [ 'str', 'binary' ]:
       pass
 
-    kv = KvValue(value)
+    if value_type_s == 'typed-json':
+      try:
+        if not isinstance(value, dict):
+          raise ValueError(f"Expected dict, got {full_type(value)}")
+        if 'tags' in value:
+          new_tags = value['tags']
+          del value['tags']
+          for tag_name, tag_data in new_tags.items():
+            if not isinstance(tag_name, str):
+              raise ValueError(f"Expected string tag name, got {full_type(tag_name)}")
+            tag_value = KvValue.from_optionally_typed_jsonable(tag_data)
+            tags[tag_name] = tag_value
+        kv = KvValue.from_typed_jsonable(value)
+      except Exception as ex:
+        raise ValueError(f"set: Invalid typed-JSON value: {ex}") from ex
+    else:
+      kv = KvValue(value)
     store = self.get_kv_store()
-    store.set_value(key, kv)
+    store.set_value_and_tags(key, kv, tags, clear_tags=clear_tags)
 
     return 0
 
@@ -243,9 +333,15 @@ class CommandHandler:
     self._parser = parser
     parser.add_argument('--version', action='store_true', default=False,
                         help='Display version')
+    parser.add_argument('--traceback', "--tb", action='store_true', default=False,
+                        help='Display detailed exception information')
+    parser.add_argument('-M', '--monochrome', action='store_true', default=False,
+                        help='Output to stdout/stderr in monochrome. Default is to colorize if stream is a compatible terminal')
+    parser.add_argument('-c', '--compact', action='store_true', default=False,
+                        help='Compact instead of pretty-printed output')
     parser.add_argument('-C', '--cwd', default='.',
                         help="Change the effective directory used to search for configuration")
-    parser.add_argument('-c', '--config',
+    parser.add_argument('--config',
                         help="Specify the location of the config file")
     parser.add_argument('-p', '--passphrase', default=None,
                         help='The passphrase to be used for accessing the store. By default, the ' +
@@ -277,35 +373,77 @@ class CommandHandler:
                         help='The key name for which a value is being set')
     parser_set.add_argument('value', nargs='?', default=None,
                         help='The value to assign to the key. By default, interpreted as a string value. See options for interpretaton.')
-    parser_set.add_argument('-t', '--type', dest='value_type', default=None, choices= [ 'str', 'int', 'float', 'bool', 'json', 'base64', 'binary' ],
-                        help='Specify how the provided value is interpreted')
+    parser_set.add_argument('-t', '--type', dest='value_type', default=None, choices= [ 'str', 'int', 'float', 'bool', 'json', 'base64', 'binary' 'typed-json'],
+                        help='Specify how the provided input for the value is interpreted. Default is "str". "base64" ' +
+                             'will decode a base64 string into a binary value. "typed-json" will accept a JSON dict with')
+    parser_set.add_argument('--typed-json', dest="vtype_typed_json", action='store_true', default=False,
+                        help='short for --type=typed-json')
     parser_set.add_argument('--json', dest="vtype_json", action='store_true', default=False,
                         help='short for --type=json')
     parser_set.add_argument('--int', dest="vtype_int", action='store_true', default=False,
                         help='short for --type=int')
+    parser_set.add_argument('--float', dest="vtype_float", action='store_true', default=False,
+                        help='short for --type=float')
+    parser_set.add_argument('--bool', dest="vtype_bool", action='store_true', default=False,
+                        help='short for --type=bool')
+    parser_set.add_argument('--text-encoding', default='utf-8',
+                        help='The encoding used for text. Default  is utf-8')
     parser_set.add_argument('--stdin', dest="use_stdin", action='store_true', default=False,
                         help='Read the value from stdin instead of the commandline')
     parser_set.add_argument('-i', '--input', dest="input_file", default=None,
                         help='Read the value from the specified file instead of the commandline')
+    parser_set.add_argument('--clear-tags', action='store_true', default=False,
+                        help='Clear all previously existing tags for the key')
     parser_set.set_defaults(func=self.cmd_set)
 
     parser_get = subparsers.add_parser('get', description="Get the value associated with a key")
     parser_get.add_argument('key',
                         help='The key name for which the value is being fetched')
+    parser_set.add_argument('-r', '--raw', action='store_true', default=False,
+                        help='Output raw strings and binary content, not json-encoded')
     parser_get.add_argument('-o', '--output', dest="output_file", default=None,
                         help='Write the value to the specified file instead of stdout')
     parser_get.set_defaults(func=self.cmd_get)
 
     argcomplete.autocomplete(parser)
     args = parser.parse_args(self._argv)
-    self._args = args
-    self._cwd = os.path.abspath(os.path.expanduser(args.cwd))
-    self._passphrase = args.passphrase
-    config_file: Optional[str] = args.config
-    if not config_file is None:
-      self._config_file = self.abspath(config_file)
-    rc = args.func()
+    traceback: bool = args.traceback
+    try:
+      self._args = args
+      self._raw_stdout = sys.stdout
+      self._raw_stderr = sys.stderr
+      self._compact = args.compact
+      monochrome: bool = args.monochrome
+      if not monochrome:
+        self._colorize_stdout = is_colorizable(sys.stdout)
+        self._colorize_stderr = is_colorizable(sys.stderr)
+        if self._colorize_stdout or self._colorize_stderr:
+          colorama.init(wrap=False)
+          if self._colorize_stdout:
+            sys.stdout = colorama.AnsiToWin32(sys.stdout)
+          if self._colorize_stderr:
+            sys.stderr = colorama.AnsiToWin32(sys.stderr)
 
+        if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
+          self._colorize_stdout = True
+        if hasattr(sys.stderr, "isatty") and sys.stderr.isatty():
+          self._colorize_stderr = True
+      self._cwd = os.path.abspath(os.path.expanduser(args.cwd))
+      self._passphrase = args.passphrase
+      config_file: Optional[str] = args.config
+      if not config_file is None:
+        self._config_file = self.abspath(config_file)
+      rc = args.func()
+    except Exception as ex:
+      if isinstance(ex, CmdExitError):
+        rc = ex.exit_code
+      else:
+        rc = 1
+      if rc != 0:
+        if traceback:
+          raise
+
+        print(f"{self.ecolor(Fore.RED)}secret-kv: error: {ex}{self.ecolor(Style.RESET_ALL)}", file=sys.stderr)
     return rc
 
 def run(argv: Optional[Sequence[str]]=None) -> int:
