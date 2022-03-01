@@ -132,6 +132,4 @@ dmypy.json
 /poetry.lock
 
 /trash/
-/test.db
-/test.json
-/kv.db
+.secret-kv/

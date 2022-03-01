@@ -87,7 +87,7 @@ class ConfigContext(ConfigDict):
       raise RuntimeError(f"Config: {full_name_of_type(klass)} is not a subclass of required type {full_name_of_type(required_type)}")
     assert issubclass(klass, Config)
     cfg  = klass()
-    assert isinstance(klass, required_type)
+    assert issubclass(klass, required_type)
     return cfg
 
   def hash_pathname(self, pathname: str) -> str:
@@ -100,7 +100,7 @@ class ConfigContext(ConfigDict):
 
   @property
   def config_file(self) -> Optional[str]:
-    return self['config_file']
+    return self.get('config_file', None)
 
   def set_config_file(self, config_file: Optional[str]=None):
     if config_file is None:
@@ -116,10 +116,6 @@ class ConfigContext(ConfigDict):
       self['config_dir'] = config_dir
       self['config_file_hash'] = config_file_hash
       self['config_dir_hash'] = config_dir_hash
-
-  @property
-  def config_file(self) -> Optional[str]:
-    return self.get('config_file', None)
 
   @property
   def config_dir(self) -> Optional[str]:

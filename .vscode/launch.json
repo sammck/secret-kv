@@ -10,6 +10,13 @@
             "request": "launch",
             "module": "secret_kv",
             "args": [ "--test" ]
+        },
+        {
+            "name": "secret-kv create",
+            "type": "python",
+            "request": "launch",
+            "module": "secret_kv",
+            "args": [ "-p", "passw0rd", "create", "." ]
         }
     ]
 }
