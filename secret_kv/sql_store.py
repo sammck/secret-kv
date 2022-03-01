@@ -495,35 +495,3 @@ class SqlKvStore(KvStore):
     result: int = cur.fetchone()[0]
     return result
 
-def test_me() -> KvStore:
-  from .config import ConfigContext
-  from .config.sql_store import SqlKvStoreConfig
-
-  ctx = ConfigContext()
-  cfg: SqlKvStoreConfig = ctx.load_file('test.json')
-  db = cfg.open_store(create=True)
-  print(f"The database is opened: '{db}'")
-  
-  return db
-
-def test_me2() -> SqlKvStore:
-  fname = 'test.db'
-  import sqlite3
-  import os
-  #if os.path.exists(fname):
-  #  os.remove(fname)
-  db = sqlite3.connect(fname)
-  s = SqlKvStore(fname, db)
-  s.init_db()
-  for i in range(10):
-    key = f"key_{i}"
-    s[key] = KvValue(f"value {i}")
-    tags = {}
-    for j in range(10):
-      tag_name = f"tag_{j}"
-      tags[tag_name] = KvValue(f"{key} tag {j}")
-    s.set_tags(key, tags)
-
-  print(json.dumps(s.as_json_obj(include_tags=True), indent=2, sort_keys=True))
-  
-  return s

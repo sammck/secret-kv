@@ -9,6 +9,13 @@ from typing import Type, Any
 from .internal_types import Jsonable
 
 import json
+import hashlib
+import os
+
+def hash_pathname(pathname: str) -> str:
+  result = hashlib.sha1(os.path.abspath(os.path.expanduser(pathname)).encode("utf-8")).hexdigest()
+  return result
+
 
 def full_name_of_type(t: Type) -> str:
   """Returns the fully qualified name of a type

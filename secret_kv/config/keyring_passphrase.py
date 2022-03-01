@@ -17,9 +17,9 @@ from .passphrase import PassphraseConfig
 class KeyringPassphraseConfig(PassphraseConfig):
   _keyring_service: Optional[str] = None
   _keyring_key: Optional[str] = None
-  _default_passphrase_cfg: Optional[PassphraseConfig] = None
   
   def bake(self):
+    super().bake()
     self._keyring_service = self.get_cfg_property_str('service')
     self._keyring_key = self.get_cfg_property_str('key')
     default_cfg_data = self.get_cfg_property('default_passphrase_cfg', None)

@@ -14,6 +14,13 @@ from ..util import full_name_of_type, full_type
 from .base import Config
 
 class PassphraseConfig(Config):
+  _default_passphrase_cfg: Optional['PassphraseConfig'] = None
+
+  def bake(self):
+    default_cfg_data = self.get_template_cfg_property('default_passphrase_cfg', None)
+    if not default_cfg_data is None:
+      self._default_passphrase_cfg = self._context.load_json_data(default_cfg_data)
+
   def get_passphrase(self) -> str:
     raise NotImplementedError(f"{full_type(self)} does not implement get_passphrase")
 

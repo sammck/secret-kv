@@ -8,7 +8,7 @@
 
 from typing import Optional
 
-class KvError(RuntimeError):
+class KvError(Exception):
   """Base class for all error exceptions defined by this package."""
   pass
 
@@ -18,4 +18,8 @@ class KvReadOnlyError(KvError):
 
 class KvNoEnumerationError(KvError):
   """Exception indicating failure because the KvStore does not support enumeration of keys."""
+  pass
+
+class KvNoPassphraseError(KvError, KeyError):
+  """Exception indicating failure because a passphrase was not provided."""
   pass

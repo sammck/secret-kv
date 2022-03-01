@@ -22,14 +22,13 @@ class SqlKvStoreConfig(KvStoreConfig):
     super().bake()
     self._db_file_name = os.path.abspath(os.path.expanduser(self.get_cfg_property_str('file_name')))
 
-  def open_store(self, create: bool=False, create_only: bool=False, erase: bool=False) -> KvStore:
+  def open_store(self, create: bool=False, create_only: bool=False, erase: bool=False, passphrase: Optional[str]=None) -> KvStore:
     create = create or create_only
     file_name = self._db_file_name
     assert not file_name is None
-    if self._passphrase_cfg is None:
-      passphrase: Optional[str] = None
-    else:
-      passphrase = self._passphrase_cfg.get_passphrase()
+    if passphrase is None:
+      if not self._passphrase_cfg is None:
+        passphrase = self._passphrase_cfg.get_passphrase()
 
     if os.path.exists(file_name):
       if create_only:
@@ -45,3 +44,7 @@ class SqlKvStoreConfig(KvStoreConfig):
     store.init_db()
     return store
 
+  def delete_store(self):
+    file_name = self._db_file_name
+    if not file_name is None:
+      os.remove(file_name)

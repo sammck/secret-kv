@@ -6,12 +6,39 @@
 """Package secret_kv provides encrypted rich key/value storage for an application or project
 """
 
-import importlib.metadata
-__version__ =  importlib.metadata.version(__package__.replace('_','-')) #  '0.1.0'
-
+from .version import __version__
 from .internal_types import Jsonable, JsonableDict
 from .store import KvStore
 from .sql_store import SqlKvStore
 from .value import KvType, KvTypeBinary, KvTypeJsonable, KvValue
-from .exceptions import KvError, KvNoEnumerationError, KvReadOnlyError
-from .config import Config, ConfigContext
+from .exceptions import (
+    KvError,
+    KvNoEnumerationError,
+    KvReadOnlyError,
+    KvNoPassphraseError,
+  )
+  
+from .config import (
+    Config,
+    ConfigContext,
+    KvStoreConfig,
+    SqlKvStoreConfig,
+    PassphraseConfig,
+    KeyringPassphraseConfig,
+  )
+
+from .simple import (
+    get_kv_store_passphrase_keyring_service,
+    get_kv_store_default_passphrase_keyring_key,
+    get_kv_store_passphrase_keyring_key,
+    get_kv_store_default_passphrase,
+    set_kv_store_default_passphrase,
+    get_kv_store_passphrase,
+    set_kv_store_passphrase,
+    load_any_config_file,
+    load_kv_store_config,
+    create_kv_store,
+    locate_kv_store_config_file,
+    open_kv_store,
+    delete_kv_store,
+  )

@@ -6,9 +6,9 @@
 """Configuration context."""
 
 from tty import CFLAG
-from typing import Optional, Dict, Any, TYPE_CHECKING, TextIO
+from typing import Optional, Dict, Any, TYPE_CHECKING, TextIO, Type, TypeVar, overload
 
-from secret_kv.util import full_name_of_type, full_type
+from ..util import full_name_of_type, full_type, hash_pathname as g_hash_pathname
 from ..internal_types import Jsonable, JsonableDict
 
 if TYPE_CHECKING:
@@ -29,6 +29,7 @@ class ConfigDict(UserDict):
   # def __deepcopy__(self: _T) -> _T:
   #   pass
 
+_T = TypeVar('_T')
 
 class ConfigContext(ConfigDict):
   def __init__(self, globals: Optional[Dict[str, Any]]=None, os_environ: Optional[Dict[str, str]]=None):
@@ -62,8 +63,16 @@ class ConfigContext(ConfigDict):
     result: Jsonable = json.loads(json_text)
     return result
 
-  def instantiate_config(self, class_name: str) -> 'Config':
+  _Config=TypeVar('_Config', bound='Config')
+  @overload
+  def instantiate_config(self, class_name: str) -> 'Config': ...
+  @overload
+  def instantiate_config(self, class_name: str, required_type: Optional[Type[_Config]]) -> _Config: ...
+  def instantiate_config(self, class_name: str, required_type: Optional[Type['Config']]=None) -> 'Config':
     from .base import Config
+    if required_type is None:
+      required_type = Config
+    assert issubclass(required_type, Config)
     class_parts = class_name.rsplit('.', 1)
     module_name: str
     if len(class_parts) > 1:
@@ -74,32 +83,63 @@ class ConfigContext(ConfigDict):
       class_tail = class_name
     module = importlib.import_module(module_name)
     klass = getattr(module, class_tail)
-    if not issubclass(klass, Config):
-      raise RuntimeError(f"Config: {full_name_of_type(klass)} is not a subclass of {full_name_of_type(Config)}")
+    if not issubclass(klass, required_type):
+      raise RuntimeError(f"Config: {full_name_of_type(klass)} is not a subclass of required type {full_name_of_type(required_type)}")
+    assert issubclass(klass, Config)
     cfg  = klass()
+    assert isinstance(klass, required_type)
     return cfg
 
   def hash_pathname(self, pathname: str) -> str:
-    result = hashlib.sha1(os.path.abspath(os.path.expanduser(pathname)).encode("utf-8")).hexdigest()
-    return result
+    return g_hash_pathname(pathname=pathname)
 
-  def set_config_file(self, config_file: str):
-    config_file = os.path.abspath(os.path.expanduser(config_file))
-    config_dir = os.path.dirname(config_file)
-    config_file_hash = self.hash_pathname(config_file)
-    config_dir_hash = self.hash_pathname(config_dir)
-    self['config_file'] = config_file
-    self['config_dir'] = config_dir
-    self['config_file_hash'] = config_file_hash
-    self['config_dir_hash'] = config_dir_hash
+  def push_config_file(self, config_file: Optional[str]) -> 'ConfigContext':
+    ctx = self.clone()
+    ctx.set_config_file(config_file)
+    return ctx
 
-  def loads(self, s: str, config_file: Optional[str]=None) -> 'Config':
-    data: Jsonable = json.loads(s)
+  @property
+  def config_file(self) -> Optional[str]:
+    return self['config_file']
+
+  def set_config_file(self, config_file: Optional[str]=None):
     if config_file is None:
-      ctx = self
+      for propname in ['config_file','config_dir','config_file_hash','config_dir_hash']:
+        if propname in self:
+          del self[propname]
     else:
-      ctx = self.clone()
-      ctx.set_config_file(config_file)
+      config_file = os.path.abspath(os.path.expanduser(config_file))
+      config_dir = os.path.dirname(config_file)
+      config_file_hash = self.hash_pathname(config_file)
+      config_dir_hash = self.hash_pathname(config_dir)
+      self['config_file'] = config_file
+      self['config_dir'] = config_dir
+      self['config_file_hash'] = config_file_hash
+      self['config_dir_hash'] = config_dir_hash
+
+  @property
+  def config_file(self) -> Optional[str]:
+    return self.get('config_file', None)
+
+  @property
+  def config_dir(self) -> Optional[str]:
+    return self.get('config_dir', None)
+
+  @property
+  def config_file_hash(self) -> Optional[str]:
+    return self.get('config_file_hash', None)
+
+  @property
+  def config_dir_hash(self) -> Optional[str]:
+    return self.get('config_dir_hash', None)
+
+  @overload
+  def loads(self, s: str) -> 'Config': ...
+  @overload
+  def loads(self, s: str, required_type: Optional[Type[_Config]]) -> _Config: ...
+  def loads(self, s: str, required_type: Optional[Type['Config']]=None) -> 'Config':
+    data: Jsonable = json.loads(s)
+    ctx = self
 
     if not isinstance(data, dict):
       raise ValueError(f"ConfigContext: expected json dict, got {full_type(data)}")
@@ -118,24 +158,37 @@ class ConfigContext(ConfigDict):
     cfg_data: Jsonable = data.get('data', {})
     if not isinstance(cfg_data, (dict, str)):
       raise ValueError(f"ConfigContext: expected dict or str data, got {full_type(cfg_data)}")
-    cfg = self.instantiate_config(cfg_class_name)
+    cfg = self.instantiate_config(cfg_class_name, required_type=required_type)
     if isinstance(cfg_data, str):
       cfg.loads(ctx, cfg_data)
     else:
       cfg.load_json_data(ctx, cfg_data)
     return cfg
 
-  def load_json_data(self, data: JsonableDict, config_file: Optional[str]=None) -> 'Config':
+  @overload
+  def load_json_data(self, data: Jsonable) -> 'Config': ...
+  @overload
+  def load_json_data(self, data: Jsonable, required_type: Optional[Type[_Config]]) -> _Config: ...
+  def load_json_data(self, data: Jsonable, required_type: Optional[Type['Config']]=None) -> 'Config':
     s = json.dumps(data)
-    cfg = self.loads(s, config_file=config_file)
+    cfg = self.loads(s, required_type=required_type)
     return cfg
 
-  def load_stream(self, stream: TextIO, config_file: Optional[str]=None) -> 'Config':
+  @overload
+  def load_stream(self, stream: TextIO) -> 'Config': ...
+  @overload
+  def load_stream(self, stream: TextIO, required_type: Optional[Type[_Config]]) -> _Config: ...
+  def load_stream(self, stream: TextIO, required_type: Optional[Type['Config']]=None) -> 'Config':
     s = stream.read()
-    cfg = self.loads(s, config_file=config_file)
+    cfg = self.loads(s, required_type=required_type)
     return cfg
 
-  def load_file(self, config_file: str):
+  @overload
+  def load_file(self, config_file: str) -> 'Config': ...
+  @overload
+  def load_file(self, config_file: str, required_type: Optional[Type[_Config]]) -> _Config: ...
+  def load_file(self, config_file: str, required_type: Optional[Type['Config']]=None) -> 'Config':
+    ctx = self.push_config_file(config_file)
     with open(config_file) as f:
-      cfg = self.load_stream(f, config_file=config_file)
+      cfg = ctx.load_stream(f, required_type=required_type)
     return cfg

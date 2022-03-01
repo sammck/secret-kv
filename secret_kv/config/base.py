@@ -29,6 +29,11 @@ class Config:
   def __init__(self):
     pass
 
+  def get_context(self) -> ConfigContext:
+    result = self._context
+    assert not result is None
+    return result
+    
   @classmethod  
   def hash_pathname(cls, pathname: str) -> str:
     result = hashlib.sha1(os.path.abspath(os.path.expanduser(pathname)).encode("utf-8")).hexdigest()
@@ -52,6 +57,30 @@ class Config:
 
   def bake(self):
     pass
+
+  @property
+  def config_file(self) -> Optional[str]:
+    """The fully qualified pathname of the configuration file from which this Config
+       originated, or None if not from a file"""
+    result: Optional[str]
+    if self._context is None:
+      result = None
+    else:
+      result = self._context.get('config_file', None)
+    return result
+
+
+  @property
+  def config_dir(self) -> Optional[str]:
+    """The fully qualified pathname of the directory containing the configuration
+       file from which this Config originated, or None if not from a file"""
+    config_file = self.config_file
+    result: Optional[str]
+    if config_file is None:
+      result = None
+    else:
+      result = os.path.dirname(config_file)
+    return result
 
   def render(self):
     self._json_data = self._context.render_template_json_data(self._template_json_data)
@@ -78,6 +107,22 @@ class Config:
     self.loads(ctx, config_text)
 
   _no_default = object()
+
+  @overload
+  def get_template_cfg_property(self, key: str, default: _T) -> Union[Jsonable, _T]: pass
+
+  @overload
+  def get_template_cfg_property(self, key: str) -> Jsonable: pass
+
+  def get_template_cfg_property(self, key: str, default = _no_default):
+    if not isinstance(self._template_json_data, dict):
+      raise TypeError(f"Config: Expected raw config data '{key}' to be dict, got {type(self._template_json_data)}")
+    result = self._template_json_data.get(key, default)
+    if result is self._no_default:
+      raise KeyError("Config: Raw property {key} does not exist and has no default")
+    if not result is None and not isinstance(result, JsonableTypes):
+      raise TypeError(f"Config: Expected property {key} to be JSON-able, got {type(result)}")
+    return result
 
   @overload
   def get_cfg_property(self, key: str, default: _T) -> Union[Jsonable, _T]: pass
