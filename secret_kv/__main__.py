@@ -67,6 +67,9 @@ class CommandHandler:
   _colorize_stdout: bool = False
   _colorize_stderr: bool = False
   _compact: bool = False
+  _raw: bool = False
+  _encoding: str
+  _output_file: Optional[str] = None
 
   def __init__(self, argv: Optional[Sequence[str]]=None):
     self._argv = argv
@@ -96,31 +99,64 @@ class CommandHandler:
       self._store = cfg.open_store(erase=self._erase_db, passphrase=self._passphrase)
     return self._store
     
-  def pretty_print(self, value: Jsonable, compact: Optional[bool]=None, colorize: Optional[bool]=None):
+  def pretty_print(
+        self, value: Union[Jsonable, bytes, bytearray, KvValue],
+        compact: Optional[bool]=None,
+        colorize: Optional[bool]=None,
+        raw: Optional[bool]=None,
+      ):
+    if isinstance(value, KvValue):
+      value = value.get_decoded_value()
+
+    if raw is None:
+      raw = self._raw
+    if raw:
+      if isinstance(value, str):
+        self._raw_stdout.write(value)
+        return
+      elif isinstance(value, (bytes, bytearray)):
+        self._raw_stdout.flush()
+        with os.fdopen(self._raw_stdout.fileno(), "wb", closefd=False) as bin_stdout:
+          bin_stdout.write(value)
+          bin_stdout.flush()
+        return
+
+    if isinstance(value, (bytes, bytearray)):
+      value = KvValue(value).as_typed_jsonable()
+
     if compact is None:
       compact = self._compact
     if colorize is None:
-      colorize = self._colorize_stdout
-    else:
-      colorize = colorize and self._colorize_stdout
+      colorize = True
 
-    if not colorize:
-      if compact:
-        json.dump(value, sys.stdout, separators=(',', ':'), sort_keys=True)
+    def emit_to(f: TextIO):
+      final_colorize = colorize and ((f is sys.stdout and self._colorize_stdout) or (f is sys.stderr and self._colorize_stderr))
+
+      if not final_colorize:
+        if compact:
+          json.dump(value, f, separators=(',', ':'), sort_keys=True)
+        else:
+          json.dump(value, f, indent=2, sort_keys=True)
+        f.write('\n')
       else:
-        json.dump(value, sys.stdout, indent=2, sort_keys=True)
-        sys.stdout.write('\n')
+        jq_input = json.dumps(value, separators=(',', ':'), sort_keys=True)
+        cmd = [ 'jq' ]
+        if compact:
+          cmd.append('-c')
+        cmd.append('.')
+        with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=f) as proc:
+          proc.communicate(input=json.dumps(value, separators=(',', ':'), sort_keys=True).encode('utf-8'))
+          exit_code = proc.returncode
+        if exit_code != 0:
+          raise subprocess.CalledProcessError(exit_code, cmd)
+
+    output_file = self._output_file
+    if output_file is None:
+      emit_to(sys.stdout)
     else:
-      jq_input = json.dumps(value, separators=(',', ':'), sort_keys=True)
-      cmd = [ 'jq' ]
-      if compact:
-        cmd.append('-c')
-      cmd.append('.')
-      with subprocess.Popen(cmd, stdin=subprocess.PIPE) as proc:
-        proc.communicate(input=json.dumps(value, separators=(',', ':'), sort_keys=True).encode('utf-8'))
-        exit_code = proc.returncode
-      if exit_code != 0:
-        raise subprocess.CalledProcessError(exit_code, cmd)
+      with open(output_file, "w", encoding=self._encoding) as f:
+        emit_to(f)
+
 
   def cmd_bare(self) -> int:
     print("A command is required", file=sys.stderr)
@@ -151,52 +187,25 @@ class CommandHandler:
     print(f"Successfully created .secret-kv store under {parent_dir}", file=sys.stderr)
     return 0
 
-  def cmd_get(self) -> int:
-    #
-    """
-    parser_set.add_argument('key',
-                        help='The key name for which a value is being set')
-    parser_set.add_argument('value', nargs='?', default=None,
-                        help='The value to assign to the key. By default, interpreted as a string value. See options for interpretaton.')
-    parser_set.add_argument('-t', '--type', dest='value_type', default=None, choices= [ 'str', 'int', 'float', 'bool', 'json', 'base64', 'binary' ],
-                        help='Specify how the provided value is interpreted')
-    parser_set.add_argument('--json', dest="vtype_json", action='store_true', default=False,
-                        help='short for --type=json')
-    parser_set.add_argument('--int', dest="vtype_int", action='store_true', default=False,
-                        help='short for --type=int')
-    parser_set.add_argument('--stdin', dest="use_stdin", action='store_true', default=False,
-                        help='Read the value from stdin instead of the commandline')
-    parser_set.add_argument('-i', '--input', dest="input_file", default=None,
-                        help='Read the value from the specified file instead of the commandline')
+  def cmd_del(self) -> int:
+    args = self._args
+    key: str = args.key
+    store = self.get_kv_store()
+    if not store.has_key(key):
+      raise KeyError(f"del: key \"{key}\" does not exist")
+    store.delete_value(key)
 
-    """
+  def cmd_get(self) -> int:
     args = self._args
     key: str = args.key
     store = self.get_kv_store()
     kv = store.get_value(key)
     if kv is None:
       raise KeyError(f"get: key \"{key}\" does not exist")
-    self.pretty_print(kv.json_data)
+    
+    self.pretty_print(kv)
 
   def cmd_set(self) -> int:
-    #
-    """
-    parser_set.add_argument('key',
-                        help='The key name for which a value is being set')
-    parser_set.add_argument('value', nargs='?', default=None,
-                        help='The value to assign to the key. By default, interpreted as a string value. See options for interpretaton.')
-    parser_set.add_argument('-t', '--type', dest='value_type', default=None, choices= [ 'str', 'int', 'float', 'bool', 'json', 'base64', 'binary' ],
-                        help='Specify how the provided value is interpreted')
-    parser_set.add_argument('--json', dest="vtype_json", action='store_true', default=False,
-                        help='short for --type=json')
-    parser_set.add_argument('--int', dest="vtype_int", action='store_true', default=False,
-                        help='short for --type=int')
-    parser_set.add_argument('--stdin', dest="use_stdin", action='store_true', default=False,
-                        help='Read the value from stdin instead of the commandline')
-    parser_set.add_argument('-i', '--input', dest="input_file", default=None,
-                        help='Read the value from the specified file instead of the commandline')
-
-    """
     tags: Dict[str, KvValue] = {}
     args = self._args
     key: str = args.key
@@ -204,6 +213,7 @@ class CommandHandler:
     clear_tags: bool = args.clear_tags
     value_s: Optional[str] = args.value
     value_type_s: Optional[str] = args.value_type
+
     if args.vtype_json:
       if value_type_s is None:
         value_type_s = 'json'
@@ -229,6 +239,16 @@ class CommandHandler:
         value_type_s = 'typed-json'
       elif value_type_s != 'typed-json':
         raise ValueError(f"set: Conflicting value types {value_type_s} and typed-json")
+    if args.vtype_binary:
+      if value_type_s is None:
+        value_type_s = 'binary'
+      elif value_type_s != 'binary':
+        raise ValueError(f"set: Conflicting value types {value_type_s} and binary")
+    if args.vtype_base64:
+      if value_type_s is None:
+        value_type_s = 'base64'
+      elif value_type_s != 'base64':
+        raise ValueError(f"set: Conflicting value types {value_type_s} and base64")
     if value_type_s is None:
       value_type_s = 'str'
     use_stdin: bool = args.use_stdin
@@ -339,6 +359,12 @@ class CommandHandler:
                         help='Output to stdout/stderr in monochrome. Default is to colorize if stream is a compatible terminal')
     parser.add_argument('-c', '--compact', action='store_true', default=False,
                         help='Compact instead of pretty-printed output')
+    parser.add_argument('-r', '--raw', action='store_true', default=False,
+                        help='Output raw strings and binary content directly, not json-encoded. Values embedded in structured results are not affected.')
+    parser.add_argument('-o', '--output', dest="output_file", default=None,
+                        help='Write output value to the specified file instead of stdout')
+    parser.add_argument('--text-encoding', default='utf-8',
+                        help='The encoding used for text. Default  is utf-8')
     parser.add_argument('-C', '--cwd', default='.',
                         help="Change the effective directory used to search for configuration")
     parser.add_argument('--config',
@@ -386,8 +412,10 @@ class CommandHandler:
                         help='short for --type=float')
     parser_set.add_argument('--bool', dest="vtype_bool", action='store_true', default=False,
                         help='short for --type=bool')
-    parser_set.add_argument('--text-encoding', default='utf-8',
-                        help='The encoding used for text. Default  is utf-8')
+    parser_set.add_argument('--binary', dest="vtype_binary", action='store_true', default=False,
+                        help='short for --type=binary')
+    parser_set.add_argument('--base64', dest="vtype_base64", action='store_true', default=False,
+                        help='short for --type=base64')
     parser_set.add_argument('--stdin', dest="use_stdin", action='store_true', default=False,
                         help='Read the value from stdin instead of the commandline')
     parser_set.add_argument('-i', '--input', dest="input_file", default=None,
@@ -399,11 +427,12 @@ class CommandHandler:
     parser_get = subparsers.add_parser('get', description="Get the value associated with a key")
     parser_get.add_argument('key',
                         help='The key name for which the value is being fetched')
-    parser_set.add_argument('-r', '--raw', action='store_true', default=False,
-                        help='Output raw strings and binary content, not json-encoded')
-    parser_get.add_argument('-o', '--output', dest="output_file", default=None,
-                        help='Write the value to the specified file instead of stdout')
     parser_get.set_defaults(func=self.cmd_get)
+
+    parser_del = subparsers.add_parser('del', description="Delete the value and all tags associated with a key")
+    parser_del.add_argument('key',
+                        help='The key name for which the value and tags should be deleted')
+    parser_del.set_defaults(func=self.cmd_del)
 
     argcomplete.autocomplete(parser)
     args = parser.parse_args(self._argv)
@@ -412,7 +441,10 @@ class CommandHandler:
       self._args = args
       self._raw_stdout = sys.stdout
       self._raw_stderr = sys.stderr
+      self._raw = args.raw
       self._compact = args.compact
+      self._output_file = args.output_file
+      self._encoding = args.text_encoding
       monochrome: bool = args.monochrome
       if not monochrome:
         self._colorize_stdout = is_colorizable(sys.stdout)

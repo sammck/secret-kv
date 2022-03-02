@@ -149,7 +149,7 @@ class KvStore(MutableMapping[str, KvValue]):
   def set_value(self, key: str, value: KvValueCoercible):
     self.set_value_and_tags(key, value, {}, clear_tags=False)
 
-  def delete_value(self, key: str):
+  def delete_value(self, key: str) -> None:
     if not self.has_key(key):
       raise KeyError(f"{self.store_name}: {json.dumps(key)}")
     raise KvReadOnlyError(f"{self.store_name}: Cannot delete key {json.dumps(key)}")
