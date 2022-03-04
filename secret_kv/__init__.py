@@ -7,10 +7,18 @@
 """
 
 from .version import __version__
-from .internal_types import Jsonable, JsonableDict
+from .internal_types import Jsonable, JsonableDict, XJsonable, XJsonableDict
 from .store import KvStore
 from .sql_store import SqlKvStore
-from .value import KvType, KvTypeBinary, KvTypeJsonable, KvValue
+from .value import (
+    KvValue,
+    xjson_encode,
+    xjson_decode,
+    xjson_encode_simple_jsonable,
+    xjson_decode_simple_jsonable,
+    validate_simple_jsonable,
+  )
+
 from .exceptions import (
     KvError,
     KvNoEnumerationError,

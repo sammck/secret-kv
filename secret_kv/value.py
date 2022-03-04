@@ -13,96 +13,250 @@
    d = KvValue([ 4, 5, 6])
    e = KvValue(None)
    f = KvValue(3.14159)
-   g = KvValue(b'binary data', kv_type=KvTypeBinary)  # encoded as a base64 string
+   g = KvValue(b'binary data')  # encoded as a base64 string
 
-   a_kv_type: KvType = a.kv_type
+   a_data = a.data
    a_json_data = a.json_data
    a_json_text = a.json_text
 """
 
-from typing import Optional, Union, Tuple, NewType
-from .internal_types import JsonableDict, Jsonable, JsonableTypes
+from typing import Optional, Union, Tuple, NewType, Mapping, Iterable, TypeVar, Type, Any
+from .internal_types import JsonableDict, Jsonable, JsonableTypes, XJsonable, XJsonableDict
 
 import json
 from base64 import b64encode, b64decode
 from copy import deepcopy
+import re
+import importlib
 
-from .util import clone_json_data, full_type
+from .util import clone_json_data, full_type, full_name_of_type
 
-KvType = NewType('KvType', str)
-"""The string name for a native type that is represented by a KvValue. Currently either KvTypeJsonable or KvTypeBinary"""
+_xjson_type_key_pattern = re.compile(r'^@+xjson_type$')
 
-KvTypeBinary: KvType = KvType('binary')
-"""Used to indicate that a KvValue represents a JSON serialization (using base-64) of a 'bytes' value"""
+class XJsonSerializable:
+  _Cls = TypeVar("_Cls", bound='XJsonSerializable')
 
-KvTypeJsonable: KvType = KvType('json')
-"""Used to indicate jthat a KvValue represents a simple JSON-serializable value"""
+  def __xjson__get_type_name(self) -> str:
+    return full_type(self)
 
-KvValueCoercible = Union['KvValue', Jsonable, bytes, bytearray]
-"""A type-hint that describes either a KvValue, or a native value that can be implicitly encoded as a KvValue"""
+  def  __xjson_encode__(self) -> Jsonable:
+    raise NotImplementedError()
 
-class KvValue:
-  """An immutable representation of a value and its type that is serializable to and from JSON.
+  def  __xjson_decode__(self, json_data: Jsonable) -> None:
+    raise NotImplementedError()
 
-  Currently, the following value types are supported:
+  @classmethod
+  def  __xjson_create_and_decode__(cls: Type[_Cls], json_data: Jsonable) -> XJsonable:
+    from copy import copy
+    obj: XJsonSerializable = cls.__new__(cls)
+    obj.__xjson_decode__(json_data)
+    return obj
 
-  KvTypeJsonable:   Any of the basic types that is directly serializable with json.dumps();
-                    e.g., None, int, float, str, bool, List[Jsonable], or Dict[str, Jsonable]
+def xjson_encode(data: XJsonable) -> Jsonable:
+  result: Jsonable
+  if data is None or isinstance(data, (int, float, bool, str)):
+    result = data
+  elif isinstance(data, (bytes, bytearray)):
+    b64 = b64encode(data).decode('utf-8')
+    result = { "@xjson_type": "binary", "data": b64 }
+  elif isinstance(data, XJsonSerializable):
+    rtype = data.__xjson__get_type_name()
+    rdata = data.__xjson_encode__()
+    result = { "@xjson_type": rtype, "data": rdata }
+  elif isinstance(data, Mapping):
+    result = {}
+    for k, v in data.items():
+      if not isinstance(k, str):
+        raise ValueError(f"xjson: expected str as dict property key, got {full_type(k)}")
+      if _xjson_type_key_pattern.match(k):
+        # to avoid key collision, we add an extra '@' to the front of any property key that begins with "@xjson_type", "@@xjson_type", ...
+        # These will be restored on decode.
+        k = '@' + k
+      rv = xjson_encode(v)
+      result[k] = v
+  elif isinstance(data, Iterable):
+    result = []
+    for v in data:
+      rv = xjson_encode(v)
+      result.append(rv)
+  else:
+    raise ValueError(f"xjson: Cannot encode type {full_type(data)}")
+  return result
 
-  KvTypeBinary:     A bytes/bytearray value
+def xjson_encode_simple_jsonable(data: Jsonable) -> Jsonable:
+  result: Jsonable
+  if data is None or isinstance(data, (int, float, bool, str)):
+    result = data
+  elif not isinstance(data, XJsonSerializable) and isinstance(data, Mapping):
+    result = {}
+    for k, v in data.items():
+      if not isinstance(k, str):
+        raise ValueError(f"xjson: expected str as dict property key, got {full_type(k)}")
+      if _xjson_type_key_pattern.match(k):
+        # to avoid key collision, we add an extra '@' to the front of any property key that begins with "@xjson_type", "@@xjson_type", ...
+        # These will be restored on decode.
+        k = '@' + k
+      rv = xjson_encode_simple_jsonable(v)
+      result[k] = v
+  elif not isinstance(data, XJsonSerializable) and isinstance(data, Iterable):
+    result = []
+    for v in data:
+      rv = xjson_encode_simple_jsonable(v)
+      result.append(rv)
+  else:
+    raise ValueError(f"xjson: Cannot encode type {full_type(data)} as simple JSON")
+  return result
+
+def xjson_decode_extended_value(rtype: str, rdata: Jsonable) -> XJsonable:
+  if not isinstance(rtype, str):
+    raise ValueError(f"xjson: expected str as extended value type, got {full_type(rtype)}")
+  if rtype == 'binary':
+    if not isinstance(rdata, str):
+      raise ValueError(f"xjson: Expected str for base-64 encoded binary data, got {full_type(rdata)}")
+    try:
+      result = b64decode(rdata)
+    except Exception as ex:
+      raise ValueError(f"xjson: Invalid base-64 binary encoding: {ex}") from ex
+  else:
+    cls_name = rtype
+    cls_name_parts = cls_name.rsplit('.', 1)
+    module_name: str
+    if len(cls_name_parts) > 1:
+      module_name, class_tail = cls_name_parts
+    else:
+      from . import value as value_module
+      module_name = value_module.__name__
+      class_tail = cls_name
+    try:
+      module = importlib.import_module(module_name)
+      klass = getattr(module, class_tail)
+    except Exception as ex:
+      raise ValueError(f"xjson: cannot instantiate extended type '{module_name}.{class_tail}': {ex}")
+    if not issubclass(klass, XJsonSerializable):
+      raise TypeError(f"xjson: extended type {full_name_of_type(klass)} cannot be decoded--no implementation of XJsonSerializable")
+    assert issubclass(klass, XJsonSerializable)   # for mypy...?
+    result = klass.__xjson_create_and_decode__(rdata)
+  return result
+    
+def xjson_decode(data: Jsonable) -> XJsonable:
+  result: XJsonable
+  if data is None or isinstance(data, (int, float, bool, str)):
+    result = data
+  elif isinstance(data, Mapping):
+    if '@xjson_type' in data:
+      rtype = data['@xjson_type']
+      if not isinstance(rtype, str):
+        raise ValueError(f"xjson: expected str value of '@xjson_type' property got {full_type(rtype)}")
+      if not 'data' in data:
+        raise ValueError(f"xjson: Missing 'data' property in extended value descriptor")
+      rdata = data['data']
+      if len(data) != 2:
+        raise ValueError(f"xjson: extraneous properties in extended value descriptor")
+      result = xjson_decode_extended_value(rtype, rdata)
+    else:
+      rdict = {}
+      for k, v in data.items():
+        if not isinstance(k, str):
+          raise ValueError(f"xjson: expected str as dict property key, got {full_type(k)}")
+        if _xjson_type_key_pattern.match(k):
+          # to avoid key collision, we previously added an extra '@' to the front of any property key that begins with "@xjson_type", "@@xjson_type", ...
+          # These will be restored here.
+          k = k[1:]
+        rv = xjson_decode(v)
+        rdict[k] = rv
+      result = rdict
+  elif isinstance(data, Iterable):
+    result = []
+    for v in data:
+      rv = xjson_decode(v)
+      result.append(rv)
+  else:
+    raise ValueError(f"xjson: Cannot decode type {full_type(data)}")
+  return result
+
+def xjson_decode_simple_jsonable(data: Jsonable) -> Jsonable:
+  result: Jsonable
+  if data is None or isinstance(data, (int, float, bool, str)):
+    result = data
+  elif not isinstance(data, XJsonSerializable) and isinstance(data, Mapping):
+    if '@xjson_type' in data:
+      raise ValueError("xjson: Cannot decode simple JSON-able; dict includes '@xjson_type' property")
+    else:
+      rdict = {}
+      for k, v in data.items():
+        if not isinstance(k, str):
+          raise ValueError(f"xjson: expected str as dict property key, got {full_type(k)}")
+        if _xjson_type_key_pattern.match(k):
+          # to avoid key collision, we previously added an extra '@' to the front of any property key that begins with "@xjson_type", "@@xjson_type", ...
+          # These will be restored here.
+          k = k[1:]
+        rv = xjson_decode_simple_jsonable(v)
+        rdict[k] = rv
+      result = rdict
+  elif not isinstance(data, XJsonSerializable) and isinstance(data, Iterable):
+    result = []
+    for v in data:
+      rv = xjson_decode_simple_jsonable(v)
+      result.append(rv)
+  else:
+    raise ValueError(f"xjson: Cannot decode type {full_type(data)}")
+  return result
+
+def clone_simple_jsonable(data: Jsonable) -> Jsonable:
+  result: Jsonable
+  if data is None or isinstance(data, (int, float, bool, str)):
+    result = data
+  elif not isinstance(data, XJsonSerializable) and isinstance(data, Mapping):
+    rdict = {}
+    for k, v in data.items():
+      if not isinstance(k, str):
+        raise ValueError(f"xjson: expected str as dict property key, got {full_type(k)}")
+      rv = clone_simple_jsonable(v)
+      rdict[k] = rv
+    result = rdict
+  elif not isinstance(data, XJsonSerializable) and isinstance(data, Iterable):
+    result = []
+    for v in data:
+      rv = clone_simple_jsonable(v)
+      result.append(rv)
+  else:
+    raise ValueError(f"clone_simple_jsonable: Not a simple JSON-able type: {full_type(data)}")
+  return result
+
+def validate_simple_jsonable(data: Any) -> Jsonable:
+  if data is None or isinstance(data, (int, float, bool, str)):
+    pass
+  elif isinstance(data, dict):
+    for k, v in data.items():
+      if not isinstance(k, str):
+        raise ValueError(f"Not simple JSON-able: property key of non-str type: {full_type(k)}")
+      validate_simple_jsonable(v)
+  elif isinstance(data, list):
+    for v in data:
+      validate_simple_jsonable(v)
+  else:
+    raise ValueError(f"Not a simple JSON-able type: {full_type(data)}")
+  return data
+
+class KvValue(XJsonSerializable):
+
+  """An immutable representation of a XJsonable value that is serializable to and from JSON.
+     Allows optional metadata to be attached.
   """
 
-  _kv_type: KvType
-  """The type of data that is encoded into json_data. Currently either KvTypeBinary or KvTypeJsonable"""
   _json_data: Jsonable
-  """The JSON-serializable value that represents the KvValue"""
+  """The simple JSON-serializable value that represents the KvValue. immutable"""
   _json_text: str
-  """The serialized JSON string that represents the value"""
+  """The serialized JSON string that represents the value. immutable"""
+  _xjson_data: XJsonable
+  """The extended JSON-serializable value that represents the native instantiated KvValue"""
 
-  def __init__(self, data: KvValueCoercible, kv_type: Optional[KvType]=None):
+  def __init__(self, data: XJsonable):
     """Create an immutable representation of a value that is serializable to and from JSON.
-
-    Args:
-        data KvValueCoercible:
-                            The value to represent. Possibilities:
-                              A KvValue:  Makes a duplicate of another KvValue. kv_type is ignored.
-                                    This is provided for convenience but is never necessary, since
-                                    a KvValue is immutable and can be shared.
-                              A Jsonable type (the basic types serializable to JSON): makes a deep
-                                    copy of the value.
-                              bytes or bytearray: Encodes the value as base-64.
-        kv_type (Optional[KvType], optional):
-                            The KvType to be associated with the data, or
-                              None to infer a type from the data. Currently only KvTypeJsonable and
-                              KvTypeBinary are supported. Defaults to None.
     """
-    if isinstance(data, KvValue):
-      kv_type = data._kv_type
-      # because KvValue is immutable, we can share the json_data
-      self._json_data = data._json_data
-      self._json_text = data._json_text
-    elif isinstance(data, (bytes, bytearray)):
-      self._json_data = b64encode(data).decode('utf-8')
-      self._json_text = json.dumps(self._json_data, sort_keys=True)
-      if kv_type is None:
-        kv_type = KvTypeBinary
-    else:
-      # Here, we effectively clone the provided json data, and verify it is Jsonable, by running it through
-      # json.dumps and back again.
-      self._json_text = json.dumps(data)
-      self._json_data = json.loads(self._json_text)
-      if kv_type is None:
-        kv_type = KvTypeJsonable
-      if kv_type == KvTypeBinary:
-        if not isinstance(self._json_data, str):
-          raise ValueError(f"Expected base64 data as str, got {full_type(self._json_data)}")
-        try:
-          b64decode(self._json_data, validate=True)
-        except Exception as ex:
-          raise ValueError(f"Invalid base64-encoded KvValue: {ex}") from ex
-    if not kv_type in [ KvTypeBinary, KvTypeJsonable ]:
-      raise ValueError(f"Invalid KvType: '{str(kv_type)}'")
-    self._kv_type = kv_type
+    self._xjson_data = deepcopy(data)
+    self._json_data = xjson_encode(self._xjson_data)
+    self._json_text = json.dumps(self._json_data, sort_keys=True, separators=(',',':'))
   
   @property
   def json_data(self) -> Jsonable:
@@ -110,106 +264,37 @@ class KvValue:
     return self._json_data
 
   @property
-  def kv_type(self) -> KvType:
-    """The type of data represented by the serialized form.  Currently either KvTypeJsonable or KvTypeBinary"""
-    return self._kv_type
-
-  def as_typed_jsonable(self) -> JsonableDict:
-    """Creates a new, modifiable JsonableDict that contains 'kv_type' and 'data' as properties.
-
-    Returns:
-        JsonableDict: a new, modifiable JsonableDict that contains 'kv_type' and 'data' as properties.
-    """
-    result: JsonableDict = dict(kv_type=str(self.kv_type), data=deepcopy(self.json_data))
-    return result
-
-  @classmethod
-  def from_typed_jsonable(cls, typed_data: JsonableDict) -> 'KvValue':
-    if not isinstance(typed_data, dict):
-      raise ValueError(f"typed-JSON value must be a dict, got {full_type(typed_data)}")
-    for k in typed_data.keys():
-      if not k in [ 'kv_type', 'data' ]:
-        raise ValueError(f"typed-JSON value has unrecognized '{k}' property")
-    if not 'kv_type' in typed_data:
-      raise ValueError(f"typed-JSON value must have a 'kv_type' property")
-    kv_type_s = typed_data['kv_type']
-    if not isinstance(kv_type_s, str):
-      raise ValueError(f"typed-JSON 'kv_type' property must be a string, go {full_type(kv_type_s)}")
-    if not kv_type_s in [ 'json', 'binary' ]:
-      raise ValueError(f"typed-JSON has invalid 'kv_type': '{kv_type_s}'")
-    kv_type = KvType(kv_type_s)
-    if not 'data' in typed_data:
-      raise ValueError(f"typed-JSON value must have a 'data' property")
-    data: Jsonable = typed_data['data']
-    result = KvValue(data, kv_type)
-    return result
-
-  @classmethod
-  def from_optionally_typed_jsonable(cls, data: Union[Jsonable, bytes, bytearray]) -> 'KvValue':
-    if isinstance(data, dict) and len(data) == 2 and 'kv_type' in data and 'data' in data:
-      result = cls.from_typed_jsonable(data)
-    else:
-      result = KvValue(data)
-    return result
-
-  def __str__(self) -> str:
-    jt = self.json_text
-    if len(jt) > 1000:
-      result = f"<KvValue type={self.kv_type} data={jt[:1000]}...>"
-    else:
-      result = f"<KvValue type={self.kv_type} data={jt}>"
-    return result
-
-  def get_decoded_value(self) -> Union[Jsonable, bytes]:
-    """Gets the native nonserializable form of the value, as a value that must not be modified
-
-    Returns:
-        Union[Jsonable, bytes]: The native representation of the value. The caller must not modify this value.
-    """
-    result: Union[Jsonable, bytes]
-    if self.kv_type == KvTypeBinary:
-      if not isinstance(self.json_data, str):
-        raise TypeError(f"KvValue: KvTypeBinary should be encoded as str, but found {full_type(self.json_data)}")
-      result = b64decode(self.json_data)
-    elif self.kv_type == KvTypeJsonable:
-      result = self.json_data
-    else:
-      raise TypeError(f"KvValue: cannot decode unknown KvType '{self.kv_type}'")
-    return result
-
-  def decode(self) -> Union[Jsonable, bytes]:
-    """Gets the native nonserializable form of the value, as a modifiable value
-
-    Returns:
-        Union[Jsonable, bytes]: The native representation of the value. The returned value
-                is owned by the caller to do with is they please.
-    """
-    if self.kv_type == KvTypeBinary:
-      if not isinstance(self.json_data, str):
-        raise TypeError(f"KvValue: KvTypeBinary should be encoded as str, but found {full_type(self.json_data)}")
-      result = b64decode(self.json_data)
-    elif self.kv_type == KvTypeJsonable:
-      # make a private copy
-      result = json.loads(self.json_text) 
-    else:
-      raise TypeError(f"KvValue: cannot decode unknown KvType '{self.kv_type}'")
-    return result
+  def data(self) -> XJsonable:
+    """The extended JSON-serializable value. Must not be modified."""
+    return self._xjson_data
 
   @property
   def json_text(self) -> str:
     """The serialized JSON text representation of the value"""
     return self._json_text
 
-  def as_sortable_value(self) -> Tuple[KvType, str]:
-    """Returns an opaque tuple that can be hashed or compared to similar tuples
+  def as_simple_jsonable(self) -> Jsonable:
+    return xjson_decode_simple_jsonable(self.json_data)
+
+  def __str__(self) -> str:
+    jt = self.json_text
+    if len(jt) > 1000:
+      result = f"<KvValue data={jt[:1000]}...>"
+    else:
+      result = f"<KvValue data={jt}>"
+    return result
+
+  def as_sortable_value(self) -> Tuple[str, str]:
+    """Returns an opaque value that can be hashed or compared to similar values
     for sorting and equality-testing purposes.
 
     NOTE: this does not provide true ordinal sort order for scalar integers and floats. It
           simply sorts by serialized json string.
     Returns:
-        Tuple[KvType, str]: An opaque tuple that represents this KvValue in a way that can be compared/sorted
+        Tuple[str, str]: An opaque value that represents this KvValue in a way that can be compared/sorted
     """
-    return self.kv_type, self.json_text
+    # TODO: include metadata
+    return self.json_text, ""
 
   def __eq__(self, other: object) -> bool:
     return isinstance(other, KvValue) and self.as_sortable_value() == other.as_sortable_value()
@@ -240,5 +325,25 @@ class KvValue:
   def __hash__(self) -> int:
     return hash(self.as_sortable_value())
 
-KvValueCoercibleTypes = ( KvValue, ) + JsonableTypes
-"""A Tuple containing the basic types that can be coerced to a KvValue. Excludes None. Useful for isinstance"""
+  def __copy__(self) -> 'KvValue':
+    # we are immutable:
+    return self
+
+  def __deepcopy__(self, memo: Any) -> 'KvValue':
+    # we are immutable:
+    return self
+
+  def clone(self) -> 'KvValue':
+    # we are immutable:
+    return self
+
+  def __xjson__get_type_name(self) -> str:
+    return "KvValue"
+
+  def  __xjson_encode__(self) -> Jsonable:
+    return deepcopy(self._json_data)
+
+  def  __xjson_decode__(self, json_data: Jsonable) -> None:
+    xdata = xjson_decode(json_data)
+    self.__init__(xdata)  # type: ignore[misc]
+

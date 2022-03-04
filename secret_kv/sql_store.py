@@ -1,10 +1,10 @@
 from typing import Optional, Union, Tuple, Dict, TypeVar, Any, List, Iterable, Mapping, Iterator
-from .internal_types import JsonableDict, Jsonable, SqlConnection
+from .internal_types import JsonableDict, Jsonable, SqlConnection, XJsonableDict, XJsonable
 
 import json
 
 from .store import KvStore
-from .value import KvValue, KvType, KvValueCoercible
+from .value import KvValue, xjson_decode
 from .exceptions import KvError, KvReadOnlyError, KvNoEnumerationError
 
 from sqlite3 import Cursor
@@ -193,9 +193,13 @@ class SqlKvStore(KvStore):
     row = cur.fetchone()
     if not row is None:
       key_id = row[0]
-      kv_type = KvType(row[1])
-      json_data: Jsonable = json.loads(row[2])
-      value = KvValue(json_data, kv_type=kv_type)
+      kv_type: str = row[1]
+      if kv_type != 'xjson':
+        raise ValueError(f"Unrecognized kv_type in kv_value table: {kv_type}")
+      json_text: str = row[2]
+      json_data: Jsonable = json.loads(json_text)
+      xjson_data = xjson_decode(json_data)
+      value = KvValue(xjson_data)
     return key_id, value
 
   def _get_tag_id_and_value_id(self, key_id: int, tag_name: str) -> Tuple[Optional[int], Optional[int]]:
@@ -212,19 +216,23 @@ class SqlKvStore(KvStore):
 
   def _get_tag(self, key_id: int, tag_name: str) -> Optional[KvValue]:
     cur = self.get_db().cursor()
-    cur.execute('''SELECT kv_type, json_text FROM kv_tag INNER JOIN kv_value on kv_tag.kv_value_id = kv_value.kv_value_id WHERE kv_tag.kv_key_id = ? AND kv_tag.key_name = ?''', [ key_id, tag_name ])
+    cur.execute('''SELECT kv_type, json_text FROM kv_tag INNER JOIN kv_value on kv_tag.kv_value_id = kv_value.kv_value_id WHERE kv_tag.kv_key_id = ? AND kv_tag.tag_name = ?''', [ key_id, tag_name ])
     row = cur.fetchone()
     if row is None:
       result: Optional[KvValue] = None
     else:
-      kv_type = KvType(row[0])
-      json_data: Jsonable = json.loads(row[1])
-      result = KvValue(json_data, kv_type=kv_type)
+      kv_type: str = row[0]
+      if kv_type != 'xjson':
+        raise ValueError(f"Unrecognized kv_type in kv_value table: {kv_type}")
+      json_text: str = row[1]
+      json_data: Jsonable = json.loads(json_text)
+      xjson_data = xjson_decode(json_data)
+      result = KvValue(xjson_data)
     return result
 
   def _has_tag(self, key_id: int, tag_name: str) -> bool:
     cur = self.get_db().cursor()
-    cur.execute('''SELECT COUNT(*) FROM kv_tag WHERE kv_tag.kv_key_id = ? AND kv_tag.key_name = ?''', [ key_id, tag_name ])
+    cur.execute('''SELECT COUNT(*) FROM kv_tag WHERE kv_tag.kv_key_id = ? AND kv_tag.tag_name = ?''', [ key_id, tag_name ])
     result = cur.fetchone()[0] > 0
     return result
 
@@ -240,9 +248,13 @@ class SqlKvStore(KvStore):
     cur.execute('''SELECT tag_name, kv_type, json_text FROM kv_tag INNER JOIN kv_value on kv_tag.kv_value_id = kv_value.kv_value_id WHERE kv_tag.kv_key_id = ?''', [ key_id ])
     for row in cur:
       tag_name: str = row[0]
-      kv_type = KvType(row[1])
-      json_data: Jsonable = json.loads(row[2])
-      value = KvValue(json_data, kv_type=kv_type)
+      kv_type: str = row[1]
+      if kv_type != 'xjson':
+        raise ValueError(f"Unrecognized kv_type in kv_value table: {kv_type}")
+      json_text: str = row[2]
+      json_data: Jsonable = json.loads(json_text)
+      xjson_data = xjson_decode(json_data)
+      value = KvValue(xjson_data)
       yield (tag_name, value)
 
   def _get_tags(self, key_id: int) -> Dict[str, KvValue]:
@@ -278,13 +290,13 @@ class SqlKvStore(KvStore):
     # TODO: this may be unnecessary due to CASCADE DELETE
     cur.execute('''DELETE from kv_tag WHERE kv_key_id = ? AND tag_name = ?''', [ key_id , tag_name])
 
-  def _insert_value(self, value: KvValueCoercible) -> int:
+  def _insert_value(self, value: XJsonable) -> int:
     """Inserts a new unreferenced KvValue into kv_value, and returns its kv_value_id
     The caller must create a reference to the returned id within this transaction,
     (either from a tag or a key) or the newly created row will leak.
 
     Args:
-        value (KvValueCoercible): The new value to insert
+        value (XJsonable): The new value to insert
 
     Returns:
         int: The kv_value_id of the newly created kv_value record
@@ -292,7 +304,7 @@ class SqlKvStore(KvStore):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     cur = self.get_db().cursor()
-    cur.execute('''INSERT INTO kv_value (kv_type, json_text) VALUES (?,?)''', [ value._kv_type, value.json_text ])
+    cur.execute('''INSERT INTO kv_value (kv_type, json_text) VALUES (?,?)''', [ "xjson", value.json_text ])
     return cur.lastrowid
 
   def _delete_value_by_id(self, value_id: int):
@@ -306,7 +318,7 @@ class SqlKvStore(KvStore):
     cur.execute('''DELETE from kv_value WHERE kv_value_id = ?''', [ value_id ])
     return cur.lastrowid
 
-  def _set_tag(self, key_id: int, tag_name: str, value: KvValueCoercible) -> int:
+  def _set_tag(self, key_id: int, tag_name: str, value: XJsonable) -> int:
     if not isinstance(value, KvValue):
       value = KvValue(value)
     tag_id, old_value_id = self._get_tag_id_and_value_id(key_id, tag_name)
@@ -322,7 +334,7 @@ class SqlKvStore(KvStore):
       self._delete_value_by_id(old_value_id)
     return tag_id
 
-  def _set_tags(self, key_id: int, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
+  def _set_tags(self, key_id: int, tags: Mapping[str, XJsonable], clear_tags: bool=False):
     if clear_tags:
       self._clear_tags(key_id)
     for tag_name, value in tags.items():
@@ -330,7 +342,7 @@ class SqlKvStore(KvStore):
         value = KvValue(value)
       self._set_tag(key_id, tag_name, value)
 
-  def _set_key_value(self, key: str, value: KvValueCoercible) -> int:
+  def _set_key_value(self, key: str, value: XJsonable) -> int:
     if not isinstance(value, KvValue):
       value = KvValue(value)
     key_id, old_value_id = self._get_key_id_and_value_id(key)
@@ -358,14 +370,14 @@ class SqlKvStore(KvStore):
     key_id, value = self._get_key_id_and_value(key)
     return value
 
-  def set_value_and_tags(self, key: str, value: KvValueCoercible, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
+  def set_value_and_tags(self, key: str, value: XJsonable, tags: Mapping[str, XJsonable], clear_tags: bool=False):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     key_id = self._set_key_value(key, value)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
     self.get_db().commit()
 
-  def set_value(self, key: str, value: KvValueCoercible):
+  def set_value(self, key: str, value: XJsonable):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     self._set_key_value(key, value)
@@ -399,9 +411,13 @@ class SqlKvStore(KvStore):
     cur.execute('''SELECT key_name, kv_type, json_text FROM kv_key INNER JOIN kv_value on kv_key.kv_value_id = kv_value.kv_value_id''')
     for row in cur:
       key: str = row[0]
-      kv_type = KvType(row[1])
-      json_data: Jsonable = json.loads(row[2])
-      value = KvValue(json_data, kv_type=kv_type)
+      kv_type: str = row[1]
+      if kv_type != 'xjson':
+        raise ValueError(f"Unrecognized kv_type in kv_value table: {kv_type}")
+      json_text: str = row[2]
+      json_data: Jsonable = json.loads(json_text)
+      xjson_data = xjson_decode(json_data)
+      value = KvValue(xjson_data)
       yield key, value
   
   def items_with_tags(self) -> Iterable[Tuple[str, KvValue, Dict[str, KvValue]]]:
@@ -410,9 +426,13 @@ class SqlKvStore(KvStore):
     for row in cur:
       key_id: int = row[0]
       key: str = row[1]
-      kv_type = KvType(row[2])
-      json_data: Jsonable = json.loads(row[3])
-      value = KvValue(json_data, kv_type=kv_type)
+      kv_type: str = row[2]
+      if kv_type != 'xjson':
+        raise ValueError(f"Unrecognized kv_type in kv_value table: {kv_type}")
+      json_text: str = row[2]
+      json_data: Jsonable = json.loads(json_text)
+      xjson_data = xjson_decode(json_data)
+      value = KvValue(xjson_data)
       tags = self._get_tags(key_id)
       yield key, value, tags
 
@@ -452,12 +472,12 @@ class SqlKvStore(KvStore):
     result = self._get_tag(key_id, tag_name)
     return result
 
-  def set_tags(self, key, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
+  def set_tags(self, key, tags: Mapping[str, XJsonable], clear_tags: bool=False):
     key_id = self._get_required_key_id(key)
     self._set_tags(key_id, tags, clear_tags=clear_tags)
     self.get_db().commit()
 
-  def set_tag(self, key, tag_name: str, value: KvValueCoercible):
+  def set_tag(self, key, tag_name: str, value: XJsonable):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     key_id = self._get_required_key_id(key)

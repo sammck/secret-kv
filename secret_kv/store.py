@@ -14,11 +14,11 @@
 """
 
 from typing import Iterator, Optional, Union, Tuple, Dict, TypeVar, Type, Generator, Iterable, Mapping, MutableMapping, KeysView, ValuesView, ItemsView, overload
-from .internal_types import JsonableDict, Jsonable, JsonableTypes
+from .internal_types import JsonableDict, Jsonable, XJsonable, XJsonableDict, XJsonableTypes
 
 import json
 
-from .value import KvValue, KvType, KvValueCoercible, KvValueCoercibleTypes
+from .value import KvValue
 from .exceptions import KvError, KvReadOnlyError, KvNoEnumerationError
 
 class KvStore(MutableMapping[str, KvValue]):
@@ -132,13 +132,13 @@ class KvStore(MutableMapping[str, KvValue]):
     """
     return self.get_value_and_tags(key)[0]
 
-  def set_value_and_tags(self, key: str, value: KvValueCoercible, tags: Mapping[str, KvValueCoercible], clear_tags: bool=False):
+  def set_value_and_tags(self, key: str, value: XJsonable, tags: Mapping[str, XJsonable], clear_tags: bool=False):
     """Set the KvValue and tags associated with a key. If the key does not exist it is created.
 
     Args:
         key (str): The key that is being created or updated.
-        value (KvValueCoercible): A KvValue or KvValue-Coercible value to assign to the key
-        tags (Mapping[str, KvValueCoercible]): A dict mapping tag names to KvValue-coercible tag values
+        value (XJsonable): A KvValue or KvValue-Coercible value to assign to the key
+        tags (Mapping[str, XJsonable]): A dict mapping tag names to KvValue-coercible tag values
         clear_tags (bool, optional): If true, any existing tags will be cleared before setting new tags. Defaults to False.
 
     Raises:
@@ -146,7 +146,7 @@ class KvStore(MutableMapping[str, KvValue]):
     """
     raise KvReadOnlyError(f"{self.store_name}: Cannot set value for key {json.dumps(key)}")
 
-  def set_value(self, key: str, value: KvValueCoercible):
+  def set_value(self, key: str, value: XJsonable):
     self.set_value_and_tags(key, value, {}, clear_tags=False)
 
   def delete_value(self, key: str) -> None:
@@ -179,7 +179,7 @@ class KvStore(MutableMapping[str, KvValue]):
       yield value
 
   def contains_value(self, value: object) -> bool:
-    if not value is None and not isinstance(value, KvValueCoercibleTypes):
+    if not value is None and not isinstance(value, XJsonableTypes):
       return False
     if not isinstance(value, KvValue):
       value = KvValue(value)
@@ -192,7 +192,7 @@ class KvStore(MutableMapping[str, KvValue]):
     if not isinstance(item, tuple) or len(item) != 2:
       return False
     key, value = item
-    if not isinstance(key, str) or (not value is None and not isinstance(value, KvValueCoercibleTypes)):
+    if not isinstance(key, str) or (not value is None and not isinstance(value, XJsonableTypes)):
       return False
     if not isinstance(value, KvValue):
       value = KvValue(value)
@@ -207,30 +207,11 @@ class KvStore(MutableMapping[str, KvValue]):
       assert not value is None
       yield key, value, tags
 
-  def as_json_obj_no_type(self) -> Dict[str, Jsonable]:
-    result: Dict[str, Jsonable] = {}
-    for key, value in self.items():
-      result[key] = value.json_data
-    return result
-
-  def as_json_obj(self, include_tags=True) -> JsonableDict:
-    result: JsonableDict = {}
-    if include_tags:
-      for key, value, tags in self.items_with_tags():
-        tag_dict = {}
-        for tag_name, tag_value in tags.items():
-          tag_dict[tag_name] = dict(kv_type=str(tag_value.kv_type), data=tag_value.json_data)
-        result[key] = dict(kv_type=str(value.kv_type), data=value.json_data, tags=tag_dict)
-    else:
-      for key, value in self.items():
-        result[key] = dict(kv_type=str(value.kv_type), data=value.json_data)
-    return result
-
   def clear(self):
     for key in list(self.keys()):
       self.delete_value(key)
 
-  def update(self, *args: Union[Mapping[str, KvValueCoercible], Iterable[Tuple[str, KvValueCoercible]]], **kwargs: KvValueCoercible):
+  def update(self, *args: Union[Mapping[str, XJsonable], Iterable[Tuple[str, XJsonable]]], **kwargs: XJsonable):
     if len(args) > 0:
       if len(args) > 1:
         raise TypeError(f"update expected at most 1 argument, got {len(args)}")
@@ -254,7 +235,7 @@ class KvStore(MutableMapping[str, KvValue]):
   def get_tag(self, key: str, tag_name: str) -> Optional[KvValue]:
     return self.get_tags(key).get(tag_name, None)
 
-  def set_tags(self, key, tags: Dict[str, KvValueCoercible], clear_tags: bool=False):
+  def set_tags(self, key, tags: Dict[str, XJsonable], clear_tags: bool=False):
     old_tags = self.get_tags(key)
     if clear_tags:
       new_tags = tags
@@ -267,7 +248,7 @@ class KvStore(MutableMapping[str, KvValue]):
     if old_tags != new_tags:
       raise KvReadOnlyError(f"{self.store_name}: Cannot set tags for key {json.dumps(key)}")
 
-  def set_tag(self, key, tag_name: str, value: KvValueCoercible):
+  def set_tag(self, key, tag_name: str, value: XJsonable):
     if not isinstance(value, KvValue):
       value = KvValue(value)
     try:

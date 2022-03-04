@@ -17,6 +17,13 @@
             "request": "launch",
             "module": "secret_kv",
             "args": [ "-p", "passw0rd", "create", "." ]
+        },
+        {
+            "name": "secret-kv --tb -r get y",
+            "type": "python",
+            "request": "launch",
+            "module": "secret_kv",
+            "args": [ "--tb", "-r", "get", "y" ]
         }
     ]
 }
