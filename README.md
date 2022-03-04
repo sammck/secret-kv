@@ -38,6 +38,7 @@ Some key features of secret-kv:
   including passphrases stored in [keyring](https://pypi.org/project/keyring/).
 * An entire project's secrets can be destroyed simply by deleting its database (and a single keyring secret)
 * Allows a project to access its private secrets with minimal configuration.
+* Finds a project's secret store from any subdirectory within the project.
 * Supports full validated JSON values.
 * Supports binary values.
 * Allows metadata to be attached to key/value pairs in the form of tag-name/value pairs
@@ -110,41 +111,151 @@ The first time you use `secret-kv` (as an OS user), you may want to set a defaul
 to be used for creation of new databases. This passphrase will be securely stored in
 [keyring](https://pypi.org/project/keyring/) under service="python/secret-kv", username="default-db-passphrase":
 
+```bash
+secret-kv -p '<default-passphrase>' set-default-passphrase
+```
 
+The default passphrase is only used during creation of new databases; it has no effect on existing databases.
+It is global to the user who sets it (i.e., global to the user's
+[keyring](https://pypi.org/project/keyring/)). It is shared across all installations of `secret-kv` for the
+user.
 
+If a default passphrase is not set, it will be necessary to supply a passphrase each time a new database is created.
 
+### Initializing a project's secret key/value store.
 
-This section explains the principles behind this README file.  If this repository were for actual _software_, this [Usage](#usage) section would explain more about how to run the software, what kind of output or behavior to expect, and so on.
+Creating and initializing a secret key/value store for a given project is simple. To create a store with the
+default passphrase (see [above](#setting-a-default-passphrase)):
 
-### Basic operation
+```bash
+secret-kv create-store <project-root-dir>
+```
 
-A suggested approach for using this example README file is as follows:
+Or, to explicitly set a passphrase for the new store:
 
-1. Copy the [source file](README.md) for this file to your repository and commit it to your version control system
-2. Delete all the body text but keep the section headings
-3. Write your README content
-4. Commit the new text to your version control system
-5. Update your README file as your software evolves
+```bash
+secret-kv -p '<my-passphrase>' create-store <project-root-dir>
+```
 
-The first paragraph in the README file (under the title at the very top) should summarize your software in a concise fashion, preferably using no more than one or two sentences.
+A new directory `<project-root-dir>/.secret-kv/` will be created that contains the encrypted database and configuration information. The
+new store's passphrase is securely stored in the user's [keyring](https://pypi.org/project/keyring/), so generally the passphrase
+will not need to be provided again for the life of the project.
 
-<p align="center"><img width="80%" src=".graphics/screenshot-top-paragraph.png"></p>
+> NOTE: The newly created `<project-root-dir>/.secret-kv/` directory includes an encrypted binary database file. While its
+> contents are unreadable without the store's passphrase, binary files of this type are not particularly friendly to source control
+> systems (e.g., Git). It is recommended for most applications that `.secret-kv/` be added to `.gitignore` to prevent
+> checking the secret store into your Git repo.
 
-The space under the first paragraph and _before_ the [Table of Contents](#table-of-contents) is a good location for optional [badges](https://github.com/badges/shields), which are small visual tokens commonly used on GitHub repositories to communicate project status, dependencies, versions, DOIs, and other information.  The particular badges and colors you use depend on your project and personal tastes.
+> NOTE: The store's passphrase will be stored in [keyring](https://pypi.org/project/keyring/) under service="python/secret-kv",
+> with the keyring username set to a hash of the store's pathname. This prevents stores created in different directories
+> from colliding in their use of [keyring](https://pypi.org/project/keyring/), but it means that if you move your store
+> to a different directory, or rename a parent directory of the store, then you will have to reinitialize the
+> store's passphrase before the store can be used again. For this reason, and because the keyring might be erased,
+> it is important to maintain a record of the passphrase if the contents of the store are irreplaceable.
 
-The [Introduction](#introduction) and [Usage](#usage) sections are described above.
+### Setting a secret value
 
-In the [Known issues and limitations](#known-issues) section, summarize any notable issues and/or limitations of your software.  The [Getting help](#getting-help) section should inform readers of how they can contact you, or at least, how they can report problems they may encounter.  The [Contributing](#contributing) section is optional; if your repository is for a project that accepts open-source contributions, then this section is where you can explain to readers how they can go about making contributions.
+To set a simple string value:
 
-The [License](#license) section should state any copyright asserted on the project materials as well as the terms of use of the software, files and other materials found in the project repository.  Finally, the [Authors and history](#authors-and-history) section should inform readers who the authors are; it is also a place where you can acknowledge other contributions to the work and the use of other people's software or tools.
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv set <key> "<string-value>"
+```
 
-### Additional options
+To set a JSON value (including bare int, float, bool, null, and quoted strings):
 
-Some projects need to communicate additional information to users and can benefit from additional sections in the README file.  It's difficult to give specific instructions &ndash; a lot depends on your software, your intended audience, etc.  Use your judgment and ask for feedback from users or colleagues to help figure out what else is worth explaining.
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv set --json <key> '<json-text>'
+secret-kv set --json <key> -i <json-filename>
+<my-json-generating-cmd> | secret-kv set --json --stdin <key>
+```
+
+To set a binary value:
+
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv set --binary --stdin <key> -i <my-binary-filename>
+```
+
+### Getting a secret value
+
+To get a value as parseable JSON (including bare int, float, bool, null, quoted strings, dicts, and lists):
+
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv get <key>
+secret-kv get <key> | jq <jq-query-expression>
+```
+> NOTE: The default representation here is what `secret-kv` calls *xjson*. For simple json values, it is generally
+> identical to the JSON that was originally set. This is always true as long as the original JSON did not contain
+> any dicts with a property name that began with one or more '@' characters followed by "kv_type". If such a property
+> did exist in the original JSOn, the property name will be prefixed with an additional '@' character in the
+> default output format. This allows for disambiguation between simple JSON and richer types that can be embedded
+> in the store (in particular, binary values). If it is essential that you get the same JSON out as you put in, even
+> in this unusual edge case, and
+> you know that the value does not include any extended types (e.g., binary values), you can provide a `--simple-json`
+> option to the `get` command--in this case, you will get back exactly what you put in, but an error will be returned if any extended
+> types are present in the value.
+
+> NOTE: Values that were set with `--binary` or `--base64` options will appear as: 
+> ```json
+> { "@kv_type": "binary", "data": "<base64-encoded-binary-data>" }
+> ```
+
+To get a string or binary value back in its raw, unquoted, non-JSON form:
+
+```bash
+cd <any-dir-under-project-root-dir>
+MY_SECRET="$(secret-kv -r get <key-for-string-secret>)"
+secret-kv -r get <key-for-binary-secret> > <my-binary-file>
+```
+
+Using the `-r` option for values that are not simple strings or binary values has no effect.
+
+### Deleting a secret value
+
+To delete a secret value from the store:
+
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv del <key>
+```
+
+### Deleting the store
+
+To delete the entire store, the containing `.secret-kv/` directory, and the [keyring](https://pypi.org/project/keyring/) entry
+for the store:
+
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv delete-store
+```
+
+### Clearing the store
+
+To remove all secrets from the store and restore it to its newly initialized state, without deleting the store
+or changing the passphrase:
+
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv clear-store
+```
+
+### Enumerating keys
+
+To get a JSON list of all keys in the store:
+
+```bash
+cd <any-dir-under-project-root-dir>
+secret-kv keys
+```
+
 
 API
 ---
 
+TBD
 
 Known issues and limitations
 ----------------------------

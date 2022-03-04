@@ -390,7 +390,7 @@ class CommandHandler:
     args = self._args
     passphrase: Optional[str] = self._passphrase
     if passphrase is None:
-      raise RuntimeError("A passphrase must be supplied with -p or --passhrase; e.g., 'secret-kv -p <passphrase> set-default-passphrase'")
+      raise RuntimeError("A passphrase must be supplied with -p or --passphrase; e.g., 'secret-kv -p <my-passphrase> set-default-passphrase'")
     set_kv_store_default_passphrase(passphrase)
 
     return 0
