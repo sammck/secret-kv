@@ -8,6 +8,8 @@
 
 import importlib.metadata as _metadata
 
-__version__ =  _metadata.version(__package__.replace('_','-')) #  '0.1.0'
+__version__ =  "0.4.2"
+
+# __version = _metadata.version(__package__.replace('_','-')) #  e.g., '0.1.0'
 
 __all__ = [ __version__ ]
