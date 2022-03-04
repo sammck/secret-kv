@@ -133,3 +133,4 @@ dmypy.json
 
 /trash/
 .secret-kv/
+/Sphinx-docs/

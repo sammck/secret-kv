@@ -7,6 +7,7 @@
 """
 
 from .version import __version__
+
 from .internal_types import Jsonable, JsonableDict, XJsonable, XJsonableDict
 from .store import KvStore
 from .sql_store import SqlKvStore
@@ -50,3 +51,4 @@ from .simple import (
     open_kv_store,
     delete_kv_store,
   )
+
