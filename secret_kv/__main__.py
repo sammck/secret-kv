@@ -24,6 +24,7 @@ from io import TextIOWrapper
 from secret_kv.internal_types import JsonableTypes
 
 from secret_kv.value import validate_simple_jsonable, xjson_decode, xjson_decode_simple_jsonable, xjson_encode_simple_jsonable
+from secret_kv import set_kv_store_default_passphrase
 
 def is_colorizable(stream: TextIO) -> bool:
   is_a_tty = hasattr(stream, 'isattry') and stream.isatty()
@@ -385,6 +386,15 @@ class CommandHandler:
 
     return 0
 
+  def cmd_set_default_passphrase(self) -> int:
+    args = self._args
+    passphrase: Optional[str] = self._passphrase
+    if passphrase is None:
+      raise RuntimeError("A passphrase must be supplied with -p or --passhrase; e.g., 'secret-kv -p <passphrase> set-default-passphrase'")
+    set_kv_store_default_passphrase(passphrase)
+
+    return 0
+
   def run(self) -> int:
     """Run the secret-kv command-line tool with provided arguments
 
@@ -538,8 +548,13 @@ class CommandHandler:
 
     # ======================= keys
 
-    parser_get = subparsers.add_parser('keys', description="Get a list of the keys in the store")
-    parser_get.set_defaults(func=self.cmd_keys)
+    parser_keys = subparsers.add_parser('keys', description="Get a list of the keys in the store")
+    parser_keys.set_defaults(func=self.cmd_keys)
+
+    # ======================= keys
+
+    parser_set_default_passphrase = subparsers.add_parser('set-default-passphrase', description="Set the default passphrase for newly created stores")
+    parser_set_default_passphrase.set_defaults(func=self.cmd_set_default_passphrase)
 
     # =========================================================
 
