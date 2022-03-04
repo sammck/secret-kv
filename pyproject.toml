@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "secret-kv"
-version = "0.2.0"
+version = "0.3.0"
 description = "Project-local secret key/value storage protected by a single passphrase stored in keyring"
 authors = [ "Sam McKelvie <dev@mckelvie.org>" ]
 license = "MIT"
@@ -31,4 +31,6 @@ build-backend = "poetry.core.masonry.api"
 secret-kv = 'secret_kv.__main__:run'
 
 [tool.semantic_release]
-version_variable = ['secret_kv/version.py:__version__', 'pyproject.toml:tool.poetry.version']
+version_toml = [
+    'pyproject.toml:tool.poetry.version'
+  ]
