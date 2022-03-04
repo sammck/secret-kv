@@ -6,8 +6,8 @@
 """Package secret_kv provides encrypted rich key/value storage for an application or project
 """
 
-#import importlib.metadata as _metadata
-#__version__ =  _metadata.version(__package__.replace('_','-')) #  '0.1.0'
-__version__ =  "0.3.0"
+import importlib.metadata as _metadata
+
+__version__ =  _metadata.version(__package__.replace('_','-')) #  '0.1.0'
 
 __all__ = [ __version__ ]
