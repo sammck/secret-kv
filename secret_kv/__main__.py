@@ -445,6 +445,10 @@ class CommandHandler:
     self.pretty_print(passphrase)
     return 0
 
+  def cmd_version(self) -> int:
+    self.pretty_print(pkg_version)
+    return 0
+
   def run(self) -> int:
     """Run the secret-kv command-line tool with provided arguments
 
@@ -464,8 +468,6 @@ class CommandHandler:
     # ======================= Main command
 
     self._parser = parser
-    parser.add_argument('--version', action='store_true', default=False,
-                        help='Display version')
     parser.add_argument('--traceback', "--tb", action='store_true', default=False,
                         help='Display detailed exception information')
     parser.add_argument('-M', '--monochrome', action='store_true', default=False,
@@ -495,6 +497,12 @@ class CommandHandler:
                         help='Additional help available with "<command-name> -h"')
 
                 
+    # ======================= keys
+
+    parser_version = subparsers.add_parser('version', 
+                            description='''Display version information. JSON-quoted string. If a raw string is desired, user -r.''')
+    parser_version.set_defaults(func=self.cmd_version)
+
     # ======================= test
 
     parser_test = subparsers.add_parser('test', description="Run a simple test. For debugging only.  Will be removed.")
