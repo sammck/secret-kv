@@ -23,8 +23,19 @@ import subprocess
 from io import TextIOWrapper
 from secret_kv.internal_types import JsonableTypes
 
-from secret_kv.value import validate_simple_jsonable, xjson_decode, xjson_decode_simple_jsonable, xjson_encode_simple_jsonable
-from secret_kv import set_kv_store_default_passphrase
+from secret_kv.value import (
+    validate_simple_jsonable,
+    xjson_decode,
+    xjson_decode_simple_jsonable,
+    xjson_encode_simple_jsonable
+  )
+
+from secret_kv import (
+    set_kv_store_default_passphrase,
+    get_kv_store_default_passphrase,
+    set_kv_store_passphrase,
+    get_kv_store_passphrase
+  )
 
 def is_colorizable(stream: TextIO) -> bool:
   is_a_tty = hasattr(stream, 'isattry') and stream.isatty()
@@ -388,11 +399,50 @@ class CommandHandler:
 
   def cmd_set_default_passphrase(self) -> int:
     args = self._args
-    passphrase: Optional[str] = self._passphrase
+    passphrase: Optional[str] = args.new_passphrase
     if passphrase is None:
-      raise RuntimeError("A passphrase must be supplied with -p or --passphrase; e.g., 'secret-kv -p <my-passphrase> set-default-passphrase'")
+      passphrase = self._passphrase
+    if passphrase is None:
+      try:
+        config_file = self.get_config_file()
+        passphrase = get_kv_store_passphrase(config_file)
+      except Exception:
+        pass
+    if passphrase is None:
+      raise RuntimeError("A passphrase must be supplied as an arg (or with -p or --passphrase); e.g., 'secret-kv set-default-passphrase <my-passphrase>'")
     set_kv_store_default_passphrase(passphrase)
+    return 0
 
+  def cmd_get_default_passphrase(self) -> int:
+    passphrase = get_kv_store_default_passphrase()
+    self.pretty_print(passphrase)
+    return 0
+
+  def cmd_reset_passphrase(self) -> int:
+    args = self._args
+    passphrase: Optional[str] = args.new_passphrase
+    if passphrase is None:
+      passphrase = self._passphrase
+    if passphrase is None:
+      raise RuntimeError("A passphrase must be supplied as an arg (or with -p or --passphrase); e.g., 'secret-kv reset-passphrase <my-passphrase>'")
+    config_file = self.get_config_file()
+    set_kv_store_passphrase(config_file, passphrase)
+    return 0
+
+  def cmd_update_passphrase(self) -> int:
+    args = self._args
+    new_passphrase: str = args.new_passphrase
+    config_file = self.get_config_file()
+    store = self.get_kv_store()
+    store.update_passphrase(new_passphrase)
+    # NOTE: A failure here could leave DB and keychain out of sync
+    set_kv_store_passphrase(config_file, new_passphrase)
+    return 0
+
+  def cmd_get_passphrase(self) -> int:
+    config_file = self.get_config_file()
+    passphrase = get_kv_store_passphrase(config_file)
+    self.pretty_print(passphrase)
     return 0
 
   def run(self) -> int:
@@ -551,10 +601,51 @@ class CommandHandler:
     parser_keys = subparsers.add_parser('keys', description="Get a list of the keys in the store")
     parser_keys.set_defaults(func=self.cmd_keys)
 
-    # ======================= keys
+    # ======================= set-default-passphrase
 
-    parser_set_default_passphrase = subparsers.add_parser('set-default-passphrase', description="Set the default passphrase for newly created stores")
+    parser_set_default_passphrase = subparsers.add_parser('set-default-passphrase',
+                        description='''Set the default passphrase for newly created stores.''')
+    parser_set_default_passphrase.add_argument('new_passphrase', nargs='?', default=None,
+                        help='''The new store passphrase to be saved in the keychain. If
+                                not provided, the passphrase provided with -p, or the
+                                passphrase associated with the current store will be used.''')
     parser_set_default_passphrase.set_defaults(func=self.cmd_set_default_passphrase)
+
+    # ======================= get-default-passphrase
+
+    parser_get_default_passphrase = subparsers.add_parser('get-default-passphrase',
+                        description='''Get the default passphrase for newly created stores.
+                                       In JSON quoted string format by default; use -r for raw string.''')
+    parser_get_default_passphrase.set_defaults(func=self.cmd_get_default_passphrase)
+
+    # ======================= reset-passphrase
+
+    parser_reset_passphrase = subparsers.add_parser('reset-passphrase',
+                        description='''Hard reset the passphrase saved in keyring for the store.
+                                       Does *not* update the actual passphrase with which the store is encrypted.
+                                       The new passphrase can be provided with -p or as a positional argument.
+                                       This command is useful when the keyring entry is lost and must be reset.''')
+    parser_reset_passphrase.add_argument('new_passphrase', nargs='?', default=None,
+                        help='The new store passphrase to be saved in the keychain.')
+    parser_reset_passphrase.set_defaults(func=self.cmd_reset_passphrase)
+
+    # ======================= update-passphrase
+
+    parser_update_passphrase = subparsers.add_parser('update-passphrase',
+                        description='''Re-encrypt the store with a new passphrase, and update the passphrase saved in keyring.
+                                       Requires the previous passphrase to be saved in keyring or provided with -p.
+                                       This update is not transactional, and a failure during update may leave the database
+                                       and keyring in inconsistent states.''')
+    parser_update_passphrase.add_argument('new_passphrase',
+                        help='The new passphrase for the store.')
+    parser_update_passphrase.set_defaults(func=self.cmd_update_passphrase)
+
+    # ======================= get-passphrase
+
+    parser_get_passphrase = subparsers.add_parser('get-passphrase',
+                        description='''Get the passphrase used to access the store, as saved in keyring.
+                                       In JSON quoted string format by default; use -r for raw string.''')
+    parser_get_passphrase.set_defaults(func=self.cmd_get_passphrase)
 
     # =========================================================
 

@@ -5,9 +5,10 @@ import json
 
 from .store import KvStore
 from .value import KvValue, xjson_decode
-from .exceptions import KvError, KvReadOnlyError, KvNoEnumerationError
+from .exceptions import KvBadPassphraseError, KvError, KvReadOnlyError, KvNoEnumerationError
 
 from sqlite3 import Cursor
+from sqlite3.dbapi2 import DatabaseError
 
 class SqlKvStore(KvStore):
   _db: Optional[SqlConnection] = None
@@ -47,15 +48,11 @@ class SqlKvStore(KvStore):
     self._passphrase = passphrase
     return self._db
 
-  def close(self):
-    if not self._db is None:
-      self._db.close()
-
   def initialize_db_pragmas(self):
     if not self._db_pragmas_initialized:
       db = self.db
       if not self._passphrase is None:
-        # NOTE: sqlite3 interpolation/scaping does not work with pragma.
+        # NOTE: sqlite3 interpolation/escaping does not work with pragma.
         #       so we will manually escape the quoted passphrase
         escaped_passphrase = self._passphrase.replace("'", "''")
         db.execute(f"PRAGMA key = '{escaped_passphrase}';")
@@ -122,7 +119,12 @@ class SqlKvStore(KvStore):
       db = self.db
       self.initialize_db_pragmas()
       cur = db.cursor()
-      cur.execute('''SELECT count(name) FROM sqlite_master WHERE type='table' AND name=? ''', [ "dbinfo" ])
+      try:
+        cur.execute('''SELECT count(name) FROM sqlite_master WHERE type='table' AND name=? ''', [ "dbinfo" ])
+      except Exception as ex:
+        if hasattr(ex, 'sqlite_errorname') and ex.sqlite_errorname == 'SQLITE_NOTADB':
+          raise KvBadPassphraseError(f"Incorrect passphrase for {self}, or the database is corrupt.") from ex
+        raise
 
       if cur.fetchone()[0] == 0:
         self.initialize_new_db()
@@ -142,6 +144,14 @@ class SqlKvStore(KvStore):
           raise RuntimeError(f"{self}: Database schema version {schema_version} is older than software schema version {self.SCHEMA_VERSION}; schema upgrade is not implemented. Delete the database and recreate.")
       self._db_initialized = True
 
+
+  def update_passphrase(self, new_passphrase: str) -> None:
+    db = self.get_db()
+    # NOTE: sqlite3 interpolation/escaping does not work with pragma.
+    #       so we will manually escape the quoted passphrase
+    escaped_passphrase = new_passphrase.replace("'", "''")
+    db.execute(f"PRAGMA rekey = '{escaped_passphrase}';")
+    
   def _get_key_id(self, key: str) -> Optional[int]:
     """Look up the key_id for a named key, if it exists
 

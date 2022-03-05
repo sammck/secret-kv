@@ -71,7 +71,7 @@ def get_kv_store_passphrase(config_file: str) -> str:
       raise KvNoPassphraseError(f"get_kv_store_passphrase: No passphrase set for config file '{config_file}' at keyring service '{service}', key name '{key}'") from e
   return result
 
-def set_kv_store_passphrase(config_file, passphrase: str):
+def set_kv_store_passphrase(config_file: str, passphrase: str):
   service = get_kv_store_passphrase_keyring_service()
   key = get_kv_store_passphrase_keyring_key(config_file)
   keyring.set_password(service, key, passphrase)

@@ -14,6 +14,8 @@
 """
 
 from typing import Iterator, Optional, Union, Tuple, Dict, TypeVar, Type, Generator, Iterable, Mapping, MutableMapping, KeysView, ValuesView, ItemsView, overload
+
+from secret_kv.util import full_type
 from .internal_types import JsonableDict, Jsonable, XJsonable, XJsonableDict, XJsonableTypes
 
 import json
@@ -284,6 +286,9 @@ class KvStore(MutableMapping[str, KvValue]):
 
   def close(self):
     pass
+
+  def update_passphrase(self, new_passphrase: str) -> None:
+    raise NotImplementedError(f"{full_type(self)} does not implement update_passphrase")
 
   def __eq__(self, other: object) -> bool:
     if not isinstance(other, Mapping):

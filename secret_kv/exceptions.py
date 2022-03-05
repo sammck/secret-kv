@@ -23,3 +23,7 @@ class KvNoEnumerationError(KvError):
 class KvNoPassphraseError(KvError, KeyError):
   """Exception indicating failure because a passphrase was not provided."""
   pass
+
+class KvBadPassphraseError(KvError):
+  """Exception indicating failure because an incorrect passphrase was provided."""
+  pass
